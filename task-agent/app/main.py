@@ -11,15 +11,13 @@ from fastapi import FastAPI
 from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
-from app.graph import build_graph
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    graph = await build_graph(settings)
     agent_card = build_agent_card(settings)
-    executor = TaskAgentExecutor(graph, settings)
+    executor = TaskAgentExecutor(settings)
     request_handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=InMemoryTaskStore(),

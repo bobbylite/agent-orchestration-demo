@@ -13,11 +13,14 @@ future session (or future you) needs to not re-derive from scratch.
 ## Stack
 
 ```
-backend/            Chat Agent — FastAPI + LangGraph + OpenTelemetry, Python 3.14 via uv
-frontend/            React 19 + Vite 8 (rolldown) + Tailwind v4, Node >=22.12
-task-agent/          Specialist Agent — separate process, own A2A server (a2a-sdk)
-mcp-todos-server/    Standalone MCP server (fastmcp, Streamable HTTP) — mocked todos tool
-shared/              agentorchestration_shared — inbound-auth verification, used by backend + task-agent
+backend/                     Chat Agent — FastAPI + LangGraph + OpenTelemetry, Python 3.14 via uv
+frontend/                    React 19 + Vite 8 (rolldown) + Tailwind v4, Node >=22.12
+task-agent/                  Specialist Agent — separate process, own A2A server (a2a-sdk)
+mcp-todos-server/            MCP server (fastmcp, Streamable HTTP, mocked todos tool) + FastAPI app
+                              for its own PingOne-gated UI's API + OBO audit log
+mcp-todos-server/frontend/   React 19 + Vite 8 (rolldown) + Tailwind v4 — its own UI
+shared/                      agentorchestration_shared — inbound-auth verification, used by
+                              backend + task-agent + mcp-todos-server
 ```
 
 Everything was deliberately scaffolded on latest-stable versions, not
@@ -232,10 +235,98 @@ calls actually executed, not mocked function calls). Two full passes:
   activity isn't visible in the frontend's Telemetry panel, only via its
   own console/logs. The Chat Agent's `agent.a2a_delegate` span *does* show
   the delegation round-trip in the existing panel.
-- Docker/compose wiring for `task-agent/` and `mcp-todos-server/` — dev
-  workflow only (`uv run` / `python server.py` per service) so far.
 - `task-agent` having its own distinct PingOne identity (see "Identity
   propagation" above).
+
+## MCP server: its own UI, PingOne SSO, and an OBO audit log (2026-08-15)
+
+`mcp-todos-server/` stopped being a bare, unauthenticated `fastmcp`
+one-file server (`server.py` is gone — replaced by an `app/` package) and
+became a full FastAPI app that hosts three things on the same port (9000,
+unchanged): the MCP endpoint (`/mcp`), a REST API for its own web UI
+(`/api/auth`, `/api/todos`, `/api/audit`), and `/api/health`. The MCP
+sub-app is built with `fastmcp`'s `mcp.http_app(path="/mcp")` and mounted
+at `"/"` on the FastAPI app *after* all routers are included, so the
+explicit `/api/*` routes match first and the mount only catches the MCP
+traffic — and its `lifespan` is forwarded into FastAPI's own
+(`FastAPI(lifespan=mcp_app.lifespan)`), or streamable-http sessions never
+initialize.
+
+**Why this exists**: the ask was to make the MCP server "agent aware" —
+tag which todos a human created directly vs. an agent created on a human's
+behalf — and, the important part, show a real OBO (on-behalf-of) audit
+log: *"Agent Task Agent used list_todos on behalf of
+robert.luisi@pingidentity.com"*. That requires the human's actual identity
+to reach this service, which it never could before: task-agent only ever
+saw a `sub` (opaque UUID) and no email/username claim, and had no way to
+forward what it *did* verify any further downstream.
+
+**Three PingOne apps now, not two.** `mcp-todos-server/`'s own UI gets a
+dedicated third PingOne app (its own sign-in, own session cookie, own
+`SESSION_SECRET`) — confirmed with the user rather than reusing app #1.
+See README's "PingOne setup".
+
+**Identity resolution for the audit log — confirmed design: token claim
+first, session-cache fallback.** `shared/inbound_auth.VerifiedIdentity`
+gained two additive fields: `email` (best-effort, from the verified
+token's `email`/`preferred_username` claim — only present if the PingOne
+resource maps one onto its access tokens) and `aud` (the audience actually
+verified against — this is what lets the audit log literally show the
+"(from audience)" detail the ask asked for). `mcp-todos-server/app/identity.py`
+tries `VerifiedIdentity.email` first; if absent, falls back to a
+`sub -> {email, name}` cache populated whenever a human signs into
+*this service's own UI* (same PingOne tenant, so the same `sub` a
+delegated token carries); if neither, callers show the raw `sub` rather
+than fabricating a label. This means an OBO entry's human-readable
+identity may show a raw `sub` for a human who has only ever used the chat
+app and never separately signed into `mcp-todos-server/`'s UI — expected,
+not a bug.
+
+**task-agent now rebuilds its MCP connection per request, not once at
+startup.** `langchain_mcp_adapters`' `StreamableHttpConnection` only
+accepts `headers` at client-construction time, not per call, and the
+whole point here is forwarding *this request's* freshly-verified bearer
+token as the `Authorization` header on the MCP call so `mcp-todos-server`
+can independently re-verify it (same shared `verify_bearer_token()`) and
+attribute the call to the real human. So `task-agent/app/graph.py`'s
+`build_graph()` now takes an optional `bearer_token`, and
+`TaskAgentExecutor.execute()` (`task-agent/app/agent_executor.py`) calls
+it fresh per task instead of `app/main.py`'s `lifespan` building one graph
+reused forever. Deliberate trade: one extra MCP tool-list handshake per
+task, in exchange for never forwarding a stale or wrong-identity
+connection — same "verify/act fresh every time" principle as inbound auth
+itself, not a performance oversight.
+
+**`mcp-todos-server` gates independently of `task-agent`, not trusting its
+gate.** `mcp-todos-server/app/policy.py` is a straight copy of
+`task-agent/app/policy.py`'s shape (identity ACL + required scope, both
+checked) — this service doesn't assume task-agent already enforced
+anything, the same "adversarial" posture task-agent itself takes toward
+the Chat Agent. A denied call still gets audited (`outcome="denied"`), not
+silently dropped.
+
+**Two actor paths into the same audit log**
+(`mcp-todos-server/app/audit.py`, an in-memory ring buffer shaped like
+`backend/app/telemetry.py`'s span buffer): `mcp-todos-server/app/mcp_server.py`'s
+three tools record `actor_type="agent"` entries (the OBO ones — every
+call, allowed or denied) via inbound-auth verification of the forwarded
+token; `mcp-todos-server/app/routes/todos.py` (session-cookie
+authenticated, same "a verified session is enough for a non-delegated
+action" tier the chat app already uses for plain chat) records
+`actor_type="human"` entries for direct UI actions. Both paths write
+through the same `mcp-todos-server/app/store.py` functions, tagging every
+todo `created_by: "human" | "agent"` plus who.
+
+**A fourth (well, fifth counting both frontends) copy of the "must match
+exactly" env-var gotcha**: `mcp-todos-server/.env`'s `OIDC_DISCOVERY_URL`,
+`AGENT_EXPECTED_AUDIENCE`, `ALLOWED_AGENT_CLIENT_ID`, `TODOS_READ_SCOPE`,
+and `TODOS_WRITE_SCOPE` must match `backend/.env`'s and `task-agent/.env`'s
+values exactly — same reasoning as the existing gotcha below, now with a
+third service in the chain. `ALLOWED_AGENT_CLIENT_ID` here is
+`backend/.env`'s `AGENT_CLIENT_ID` (the Chat Agent's own worker-app client
+id) — *not* task-agent's own identity, because the Chat Agent's delegated
+token is forwarded unchanged all the way through, so its `client_id` claim
+never changes hop to hop (see "Identity propagation across the A2A hop").
 
 ## What's built (as of 2026-08-15)
 
@@ -255,8 +346,11 @@ calls actually executed, not mocked function calls). Two full passes:
   per-thread checkpointed — 2 nodes, with real, scope-gated A2A delegation
   to a separate Task Agent service for todos (see "LangGraph + real A2A"
   and "Per-action scoped delegation" above).
-- Standalone `mcp-todos-server/` (in-memory, no auth — trusted-network-only
-  demo service) and `task-agent/` (own A2A server, own scope-aware policy gate).
+- `task-agent/` (own A2A server, own scope-aware policy gate) delegating to
+  `mcp-todos-server/` — in-memory, no persistence, but no longer
+  unauthenticated: its own PingOne-gated UI (todos tagged human vs. agent),
+  its own scope-aware policy gate, and an OBO audit log. See "MCP server:
+  its own UI, PingOne SSO, and an OBO audit log" above.
 - UI styled to match Ping Identity's actual production site (pulled real
   hex values and Montserrat from their live CSS, not guessed): dark navy ink
   `#051727` on near-white `#fbfbfc`, red/orange brand gradient
@@ -287,6 +381,29 @@ calls actually executed, not mocked function calls). Two full passes:
   cryptographically. If `/api/invoke` 401s with `audience_mismatch`, the
   error message includes the actual `aud` value PingOne issued — set
   `AGENT_EXPECTED_AUDIENCE` to that value.
+- **The *sign-in* app's own access token must ALSO be a JWT** — a separate
+  gotcha from the one above, easy to conflate. `/api/auth/agent-token`
+  sends `session["access_token"]` (minted at login, by app #1) as Token
+  Exchange's `subject_token`; if the resource *that* app's tokens are
+  minted against is opaque/reference (common PingOne default when no
+  custom resource is attached — often the built-in "PingOne API" one),
+  PingOne can't read claims off it and Token Exchange fails with `PingOne
+  rejected the Token Exchange request ...: Cannot parse token claims for
+  request param 'subject_token'` — a 502 from `backend/app/auth/routes.py`
+  (which now surfaces PingOne's real `error_description` instead of
+  crashing with a bare 500 — see below), not a silent failure. Fix is in
+  PingOne's console (Connections → Resources → the resource → Access
+  Token Type → JWT/self-signed), not code.
+- **`backend/app/auth/routes.py`'s `/api/auth/agent-token` now converts
+  `httpx.HTTPStatusError` from either PingOne call (Client Credentials,
+  Token Exchange) into a `502` carrying PingOne's actual
+  `error`/`error_description`** (`_pingone_error_detail()`) — previously
+  any PingOne rejection here crashed as an unhandled exception, surfacing
+  to the frontend as an opaque `500 Internal Server Error: Internal Server
+  Error` with zero diagnostic value. If you see that exact bare-500 shape
+  from a different endpoint, the fix pattern (catch `httpx.HTTPStatusError`
+  around the call, raise `HTTPException` with the response body) is the one
+  to copy — don't let an upstream OAuth rejection surface as a raw crash.
 - **`authlib.jose` is deprecated** in favor of `joserfc` (same author) as of
   authlib 1.7+ — this codebase uses `joserfc` throughout for JWT/JWE, don't
   add `authlib` back for jose functionality.
@@ -298,14 +415,17 @@ calls actually executed, not mocked function calls). Two full passes:
   keep it that way rather than "simplifying" to the marketplace Action.
 - Don't broadly `pkill -f vite` / `pkill -f uvicorn` when testing — it kills
   every matching process, including ones the user started themselves. Same
-  caution now applies to `pkill -f "uvicorn app.main:app"` — matches both
-  `backend/` and `task-agent/`; kill by port or PID instead.
-- **`backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL` /
-  `AGENT_EXPECTED_AUDIENCE` must match exactly** — the Task Agent verifies
-  the same delegated token, independently, with its own copy of the same
-  config. A mismatch here fails the same way a real misconfigured PingOne
-  resource would (`audience_mismatch` / `issuer_mismatch`), which is
-  correct behavior, not a bug — but it's easy to forget to update both.
+  caution now applies to `pkill -f "uvicorn app.main:app"` — matches
+  `backend/`, `task-agent/`, *and* `mcp-todos-server/`; kill by port (8000 /
+  9010 / 9000) or PID instead. Same for `pkill -f vite` — matches both
+  `frontend/` (5173) and `mcp-todos-server/frontend/` (5174).
+- **`backend/.env`, `task-agent/.env`, and `mcp-todos-server/.env`'s
+  `OIDC_DISCOVERY_URL` / `AGENT_EXPECTED_AUDIENCE` must match exactly** —
+  the Task Agent and `mcp-todos-server` both independently verify the same
+  delegated token, each with its own copy of the same config. A mismatch
+  here fails the same way a real misconfigured PingOne resource would
+  (`audience_mismatch` / `issuer_mismatch`), which is correct behavior, not
+  a bug — but it's easy to forget to update all three.
 - **Running `python script.py` (not `-c`) with `uv run` doesn't put the
   service's own directory on `sys.path`** the way `-c`/inline code does —
   Python adds the *script's* directory, not cwd. A standalone test script
@@ -328,16 +448,24 @@ calls actually executed, not mocked function calls). Two full passes:
   `backend/app/routes/invoke.py` and `task-agent/app/agent_executor.py` now
   have their own `_extract_text()` normalizing this — reuse that shape
   anywhere else `AIMessage.content` gets read directly.
-- **`backend/.env` and `task-agent/.env`'s `TODOS_READ_SCOPE` /
-  `TODOS_WRITE_SCOPE` must also match exactly**, same reasoning as
-  `AGENT_EXPECTED_AUDIENCE` above — `task-agent/app/policy.py` checks the
-  verified token's `scope` claim against its own copies of these two values.
+- **`backend/.env`, `task-agent/.env`, and `mcp-todos-server/.env`'s
+  `TODOS_READ_SCOPE` / `TODOS_WRITE_SCOPE` must also match exactly**, same
+  reasoning as `AGENT_EXPECTED_AUDIENCE` above — `task-agent/app/policy.py`
+  and `mcp-todos-server/app/policy.py` each check the verified token's
+  `scope` claim against their own copies of these two values.
+- **`fastmcp`'s `mcp.http_app(path=...).lifespan` must be forwarded into
+  the parent FastAPI app's own `lifespan`** when mounting an MCP sub-app
+  inside a bigger FastAPI app (`mcp-todos-server/app/main.py`) — otherwise
+  the streamable-http session manager never starts and every MCP call
+  hangs/fails. `get_http_request()` (from `fastmcp.server.dependencies`)
+  is how an `@mcp.tool` function reads the raw `Authorization` header
+  without needing an explicit `ctx: Context` parameter.
 
 ## Skills
 
 - `run` — start all services correctly (handles the cwd/Node gotchas above;
-  now covers `backend/`, `frontend/`, `task-agent/`, and
-  `mcp-todos-server/`).
+  now covers `backend/`, `frontend/`, `task-agent/`, `mcp-todos-server/`,
+  and `mcp-todos-server/frontend/`).
 - `extend-agent-graph` — read before adding any LangGraph node, tool, or
   agent; has the full worked pattern (inbound auth + policy gate shapes) to
   copy for anything new.

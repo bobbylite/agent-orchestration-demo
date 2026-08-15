@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
@@ -27,6 +28,20 @@ from app.models import AgentTokenRequest
 from app.telemetry import with_span
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """PingOne's OAuth error responses are JSON `{"error": ..., "error_description": ...}`
+    — surface that instead of letting the raw HTTPStatusError crash the route as an
+    opaque 500. Never contains a token, only an error code/description, so it's
+    safe to pass straight through (unlike the request/response bodies this
+    wraps, which do carry secrets — this function only ever reads the error
+    fields, nothing else)."""
+    try:
+        body = exc.response.json()
+        return str(body.get("error_description") or body.get("error") or exc.response.text)
+    except ValueError:
+        return exc.response.text or str(exc)
 
 
 def _redirect_uri(settings: Settings) -> str:
@@ -178,7 +193,13 @@ async def agent_token(
         metadata = await oidc.get_metadata(settings)
 
         with with_span("agent.client_credentials") as cc_span:
-            actor_tokens = await client_credentials_grant(metadata.token_endpoint, settings)
+            try:
+                actor_tokens = await client_credentials_grant(metadata.token_endpoint, settings)
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"PingOne rejected the agent's Client Credentials grant: {_pingone_error_detail(exc)}",
+                ) from exc
             cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
             cc_span.set_attribute("oauth.scope", settings.agent_scopes or "")
 
@@ -195,13 +216,20 @@ async def agent_token(
         )
 
         with with_span("agent.token_exchange") as te_span:
-            exchanged = await token_exchange(
-                metadata.token_endpoint,
-                settings,
-                subject_token=session["access_token"],
-                actor_token=actor_tokens["access_token"],
-                scope=body.scope,
-            )
+            try:
+                exchanged = await token_exchange(
+                    metadata.token_endpoint,
+                    settings,
+                    subject_token=session["access_token"],
+                    actor_token=actor_tokens["access_token"],
+                    scope=body.scope,
+                )
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"PingOne rejected the Token Exchange request for scope {body.scope!r}: "
+                    f"{_pingone_error_detail(exc)}",
+                ) from exc
             te_span.set_attribute("identity.sub", session.get("sub", ""))
             te_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
             te_span.set_attribute("oauth.scope", body.scope)

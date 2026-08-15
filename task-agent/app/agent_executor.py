@@ -16,9 +16,9 @@ from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import TaskState
 from agentorchestration_shared import InboundAuthError, verify_bearer_token
-from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings
+from app.graph import build_graph
 
 
 def _extract_text(content: Any) -> str:
@@ -36,8 +36,7 @@ def _extract_text(content: Any) -> str:
 
 
 class TaskAgentExecutor(AgentExecutor):
-    def __init__(self, graph: CompiledStateGraph, settings: Settings) -> None:
-        self.graph = graph
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
@@ -76,8 +75,14 @@ class TaskAgentExecutor(AgentExecutor):
             )
         )
 
+        # Rebuilt per call (not cached at startup) so the MCP connection to
+        # mcp-todos-server carries *this* request's freshly-verified bearer
+        # token — the same "verify/act fresh every time" rule as inbound
+        # auth itself, not a fixed service-level credential. See
+        # CLAUDE.md "Identity propagation across the A2A hop".
+        graph = await build_graph(self.settings, bearer_token=token)
         query = get_message_text(context.message)
-        result = await self.graph.ainvoke(
+        result = await graph.ainvoke(
             {"messages": [("human", query)]},
             config={
                 "configurable": {

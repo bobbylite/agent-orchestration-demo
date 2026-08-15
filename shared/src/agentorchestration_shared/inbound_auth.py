@@ -40,6 +40,8 @@ class VerifiedIdentity:
     client_id: str | None
     actor_sub: str | None  # RFC 8693 `act.sub`, if the issuer populates it
     scope: str | None  # raw `scope` claim, space-delimited per RFC 6749 §3.3
+    email: str | None = None  # `email` or `preferred_username`, if the resource maps one onto the token
+    aud: str | None = None  # the specific audience value this token was verified against
 
     def has_scope(self, required: str) -> bool:
         return required in (self.scope or "").split()
@@ -115,4 +117,6 @@ async def verify_bearer_token(token: str, *, discovery_url: str, expected_audien
         client_id=claims.get("client_id"),
         actor_sub=actor_sub,
         scope=claims.get("scope"),
+        email=claims.get("email") or claims.get("preferred_username"),
+        aud=expected_audience,
     )

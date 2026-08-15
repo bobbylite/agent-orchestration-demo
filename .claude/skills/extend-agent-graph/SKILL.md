@@ -96,10 +96,16 @@ only `todos:read`, sent directly to the Task Agent bypassing the Chat
 Agent's own tool availability, asking it to write, was independently
 rejected with no mutation.
 
-`backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL`,
-`AGENT_EXPECTED_AUDIENCE`, `TODOS_READ_SCOPE`, and `TODOS_WRITE_SCOPE` must
-all match exactly for this to work; a mismatch fails with a genuinely
-correct `audience_mismatch`/`issuer_mismatch`, not a bug.
+`backend/.env`, `task-agent/.env`, and `mcp-todos-server/.env`'s
+`OIDC_DISCOVERY_URL`, `AGENT_EXPECTED_AUDIENCE`, `TODOS_READ_SCOPE`, and
+`TODOS_WRITE_SCOPE` must all match exactly for this to work — the
+delegated token is forwarded unchanged through both hops and each service
+independently re-verifies it; a mismatch fails with a genuinely correct
+`audience_mismatch`/`issuer_mismatch`, not a bug. `mcp-todos-server` also
+independently re-checks policy (its own `app/policy.py`, same shape as
+task-agent's) rather than trusting that task-agent already gated the
+call — every call, allowed or denied, is written to its OBO audit log
+(`mcp-todos-server/app/audit.py`).
 
 A real next step, not yet built: the Task Agent expecting a *narrower*,
 distinct audience of its own (on top of the scope check it already does),
@@ -110,11 +116,16 @@ the same-audience token for every scope).
 ### Extending with a third tool or a third agent
 
 - **New mocked tool on the Task Agent**: add it to
-  `mcp-todos-server/server.py` as another `@mcp.tool` function, then add
-  entries to `task-agent/app/policy.py`'s `_identity_acl()` and
+  `mcp-todos-server/app/mcp_server.py` as another `@mcp.tool` function
+  (verify the caller with `_authorize(tool_name)`, then call `_record(...)`
+  on success — copy the shape of `list_todos`/`add_todo`/`complete_todo`
+  exactly), then add entries to **both** `task-agent/app/policy.py`'s and
+  `mcp-todos-server/app/policy.py`'s `_identity_acl()` and
   `_required_scope()` (pick whichever of `todos_read_scope`/
   `todos_write_scope` fits, or a new scope entirely if it's a genuinely
-  different capability). Nothing else changes —
+  different capability) — each service's gate is independent, update both
+  or the new tool is quietly rejected at the second hop even once the Task
+  Agent allows it. Nothing else changes —
   `MultiServerMCPClient.get_tools()` picks it up automatically.
 - **New tool/capability on the Chat Agent**: add another `@tool async def`
   in `backend/app/agent/tools.py` (following the `_delegate(..., scope=...)`

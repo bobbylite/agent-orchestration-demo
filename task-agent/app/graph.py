@@ -36,15 +36,18 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-async def _get_mcp_tools(settings: Settings) -> list:
-    client = MultiServerMCPClient(
-        {
-            "todos": {
-                "transport": "streamable_http",
-                "url": settings.mcp_todos_url,
-            }
-        }
-    )
+async def _get_mcp_tools(settings: Settings, bearer_token: str | None) -> list:
+    connection: dict = {
+        "transport": "streamable_http",
+        "url": settings.mcp_todos_url,
+    }
+    if bearer_token:
+        # Forwarded so mcp-todos-server can independently verify the same
+        # delegated token and attribute the call to the real human it was
+        # issued for (OBO audit log) — not something task-agent asserts on
+        # its behalf. See CLAUDE.md "Identity propagation across the A2A hop".
+        connection["headers"] = {"Authorization": f"Bearer {bearer_token}"}
+    client = MultiServerMCPClient({"todos": connection})
     return await client.get_tools()
 
 
@@ -79,8 +82,8 @@ def _build_task_assistant_node(settings: Settings, tools: list):
     return task_assistant
 
 
-async def build_graph(settings: Settings) -> CompiledStateGraph:
-    tools = await _get_mcp_tools(settings)
+async def build_graph(settings: Settings, bearer_token: str | None = None) -> CompiledStateGraph:
+    tools = await _get_mcp_tools(settings, bearer_token)
 
     graph = StateGraph(AgentState)
     graph.add_node("task_assistant", _build_task_assistant_node(settings, tools))

@@ -6,10 +6,19 @@
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/mcp-todos-server/.venv/bin/python",
-      "program": "${workspaceFolder}/mcp-todos-server/server.py",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "9000"],
       "cwd": "${workspaceFolder}/mcp-todos-server",
+      "envFile": "${workspaceFolder}/mcp-todos-server/.env",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "MCP Todos Server Frontend (Vite)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/mcp-todos-server/frontend"
     },
     {
       "name": "Task Agent",
@@ -22,8 +31,10 @@
       "envFile": "${workspaceFolder}/task-agent/.env",
       "console": "integratedTerminal",
       "justMyCode": true,
-      // Its own graph fetches MCP tools at startup — needs the MCP server
-      // already accepting connections, not just "also launching".
+      // Not required for its own startup anymore (it rebuilds its MCP
+      // connection fresh per task rather than fetching tools once at
+      // boot), but a task issued before mcp-todos-server is actually up
+      // will still fail — keep it accepting connections before this runs.
       "preLaunchTask": "wait-for-mcp-todos"
     },
     {
@@ -49,12 +60,23 @@
   "compounds": [
     {
       "name": "🚀 Launch Everything",
-      "configurations": ["MCP Todos Server", "Task Agent", "Chat Agent (backend)", "Frontend (Vite)"],
+      "configurations": [
+        "MCP Todos Server",
+        "MCP Todos Server Frontend (Vite)",
+        "Task Agent",
+        "Chat Agent (backend)",
+        "Frontend (Vite)"
+      ],
       "stopAll": true
     },
     {
       "name": "💬 Chat Only (no A2A)",
       "configurations": ["Chat Agent (backend)", "Frontend (Vite)"],
+      "stopAll": true
+    },
+    {
+      "name": "🗂 Todos MCP Server (server + its own UI)",
+      "configurations": ["MCP Todos Server", "MCP Todos Server Frontend (Vite)"],
       "stopAll": true
     }
   ]

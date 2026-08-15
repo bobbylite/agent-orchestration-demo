@@ -1,0 +1,139 @@
+import { useEffect, useState, type FormEvent } from "react"
+import { api, type Todo } from "../lib/api"
+import { TodoItem } from "./TodoItem"
+
+const POLL_INTERVAL_MS = 3000
+
+interface Props {
+  signedIn: boolean
+}
+
+export function TodoPanel({ signedIn }: Props) {
+  const [todos, setTodos] = useState<Todo[]>([])
+  const [draft, setDraft] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (!signedIn) return
+    let cancelled = false
+    async function poll() {
+      try {
+        const { todos: latest } = await api.getTodos()
+        if (!cancelled) setTodos(latest)
+      } catch {
+        // best-effort; retried next tick
+      }
+    }
+    poll()
+    const id = setInterval(poll, POLL_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [signedIn])
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    const text = draft.trim()
+    if (!text || submitting) return
+    setSubmitting(true)
+    try {
+      const todo = await api.addTodo(text)
+      setTodos((prev) => [...prev, todo])
+      setDraft("")
+    } catch {
+      // best-effort; the next poll will reconcile either way
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleComplete(id: string) {
+    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: true } : t)))
+    try {
+      await api.completeTodo(id)
+    } catch {
+      // best-effort; the next poll reconciles if this actually failed
+    }
+  }
+
+  if (!signedIn) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-code-bg text-ink-muted">
+          <ListIcon />
+        </div>
+        <div className="max-w-64">
+          <p className="text-sm font-medium text-ink">Sign in to view todos</p>
+          <p className="mt-1 text-xs text-ink-muted">
+            Todos created directly by you and on your behalf by the agent both show up here once you&rsquo;re
+            signed in.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
+        <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Todos</h2>
+        <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
+          {todos.length}
+        </span>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        {todos.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+            <p className="text-sm text-ink-muted">No todos yet.</p>
+            <p className="max-w-52 text-xs text-ink-muted/70">Add one below, or ask the agent in the chat console.</p>
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {todos.map((todo) => (
+              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex shrink-0 gap-2.5 border-t border-border p-4">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          placeholder="Add a todo…"
+          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={!draft.trim() || submitting}
+          style={draft.trim() && !submitting ? { backgroundImage: "var(--brand-gradient)" } : undefined}
+          className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-md bg-brand text-brand-ink shadow-card transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          aria-label="Add todo"
+        >
+          <PlusIcon />
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function ListIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M6 5.5H16.5M6 10H16.5M6 14.5H16.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="3" cy="5.5" r="1" fill="currentColor" />
+      <circle cx="3" cy="10" r="1" fill="currentColor" />
+      <circle cx="3" cy="14.5" r="1" fill="currentColor" />
+    </svg>
+  )
+}
+
+function PlusIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M9 3.5V14.5M3.5 9H14.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}

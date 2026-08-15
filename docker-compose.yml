@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      APP_BASE_URL: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      FRONTEND_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"

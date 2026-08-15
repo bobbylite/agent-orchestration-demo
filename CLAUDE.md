@@ -237,6 +237,12 @@ observed for free: `a2a-sdk` has its own OTel instrumentation
 - **`authlib.jose` is deprecated** in favor of `joserfc` (same author) as of
   authlib 1.7+ — this codebase uses `joserfc` throughout for JWT/JWE, don't
   add `authlib` back for jose functionality.
+- **Don't use the `gitleaks/gitleaks-action` marketplace Action** — v2+
+  requires a paid license for org-owned repos, and GitHub removes Node 20
+  from hosted runners on 2026-09-16, which breaks it outright regardless of
+  license. `.github/workflows/gitleaks.yml` installs and runs the raw OSS
+  `gitleaks` binary directly instead (no license, no Node dependency) —
+  keep it that way rather than "simplifying" to the marketplace Action.
 - Don't broadly `pkill -f vite` / `pkill -f uvicorn` when testing — it kills
   every matching process, including ones the user started themselves. Same
   caution now applies to `pkill -f "uvicorn app.main:app"` — matches both

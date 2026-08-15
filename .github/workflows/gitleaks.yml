@@ -1,0 +1,35 @@
+name: Secret scanning (gitleaks)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+        run: |
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
+
+      # Runs the raw gitleaks binary directly rather than gitleaks/gitleaks-action:
+      # v2 of that action requires a paid license for org-owned repos, and (as of
+      # 2026-09-16) GitHub removes Node 20 from hosted runners entirely, which
+      # breaks gitleaks-action@v2 outright regardless of license. The OSS
+      # gitleaks binary itself has no such license or runtime dependency.
+      - name: Scan for secrets
+        run: gitleaks detect --source . --verbose --redact

@@ -34,6 +34,10 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   re-verifies the same delegated token — no implicit trust between
   services — then reasons about which tool to use against a real
   [MCP](https://modelcontextprotocol.io) server, gated by its own policy ACL.
+- **Secret scanning in CI** — every push and PR runs
+  [gitleaks](https://github.com/gitleaks/gitleaks) over the full git
+  history (`.github/workflows/gitleaks.yml`), catching any credential that
+  slips past `.gitignore` before it lands on `main`.
 
 ## Project layout
 

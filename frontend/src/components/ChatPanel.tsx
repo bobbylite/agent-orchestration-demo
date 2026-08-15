@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 import { InlineAgentApprovalPrompt } from "./InlineAgentApprovalPrompt"
 import { Markdown } from "./Markdown"
 import { TypingIndicator } from "./TypingIndicator"
@@ -26,6 +26,13 @@ interface Props {
 
 export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineApprove }: Props) {
   const [draft, setDraft] = useState("")
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  // Scroll to the bottom whenever messages change — handles both new messages
+  // and streaming tokens appending to an existing assistant message.
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -88,6 +95,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
             ))}
           </div>
         )}
+        <div ref={bottomRef} />
       </div>
       <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-3xl gap-2.5 border-t border-border p-4">
         <input

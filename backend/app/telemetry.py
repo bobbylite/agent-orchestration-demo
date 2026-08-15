@@ -87,7 +87,9 @@ def with_span(name: str, attributes: dict[str, Any] | None = None) -> Iterator[S
     """Starts (and makes current) a span named `name`. Nested calls within the
     same task automatically become child spans via OTel's context propagation.
     """
-    with _tracer.start_as_current_span(name) as span:
+    # record_exception/set_status_on_exception disabled: the except clause
+    # below handles both explicitly, so OTel's own default doesn't double up.
+    with _tracer.start_as_current_span(name, record_exception=False, set_status_on_exception=False) as span:
         if attributes:
             span.set_attributes(_redact(attributes))
         try:

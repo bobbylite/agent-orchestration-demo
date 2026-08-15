@@ -39,29 +39,39 @@ export default function App() {
     setMessages((prev) => [...prev, userMessage, assistantMessage])
     setSending(true)
 
-    await streamInvoke(threadId.current, content, {
-      onToken: (text) => {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: m.content + text } : m)),
-        )
-      },
-      onDone: () => setSending(false),
-      onError: (message) => {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: `⚠ ${message}` } : m)),
-        )
-        setSending(false)
-      },
-      onRawEvent: pushRawEvent,
-    })
+    try {
+      await streamInvoke(threadId.current, content, {
+        onToken: (text) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: m.content + text } : m)),
+          )
+        },
+        onDone: () => setSending(false),
+        onError: (message) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: `⚠ ${message}` } : m)),
+          )
+          setSending(false)
+        },
+        onRawEvent: pushRawEvent,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: `⚠ ${message}` } : m)),
+      )
+      setSending(false)
+    }
   }
 
-  const canSend = Boolean(me?.signed_in) && !sending
+  const canSend = Boolean(me?.exchanged) && !sending
   const disabledReason = !me?.oidc_enabled
     ? null
     : !me?.signed_in
       ? "Sign in with PingOne to start chatting."
-      : null
+      : !me?.exchanged
+        ? "Authenticate the agent to start chatting — a signed-in session alone isn't enough."
+        : null
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
@@ -83,7 +93,7 @@ export default function App() {
         </section>
 
         <aside className="flex min-h-0 w-96 shrink-0 flex-col divide-y divide-border">
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 flex-[3]">
             <TelemetryPanel />
           </div>
           <div className="min-h-0 flex-1">

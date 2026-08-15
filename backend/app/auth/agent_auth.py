@@ -21,12 +21,17 @@ async def client_credentials_grant(token_endpoint: str, settings: Settings) -> d
     """Step 1: the agent authenticates as itself, producing an actor token.
 
     PingOne expects client_secret_basic (HTTP Basic) here, not the more
-    common client_secret_post.
+    common client_secret_post. Most PingOne worker apps also require an
+    explicit `scope` — without one the grant either fails or returns a
+    token with no usable access.
     """
+    data: dict[str, str] = {"grant_type": "client_credentials"}
+    if settings.agent_scopes:
+        data["scope"] = settings.agent_scopes
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             token_endpoint,
-            data={"grant_type": "client_credentials"},
+            data=data,
             auth=(settings.agent_client_id, settings.agent_client_secret),
         )
         resp.raise_for_status()
@@ -42,6 +47,9 @@ async def token_exchange(
 ) -> dict[str, Any]:
     """Step 2: combine the user's session access token (subject) with the
     agent's own actor token into one delegated token carrying both identities.
+
+    `scope` here requests the scope of the resulting *delegated* token —
+    distinct from the actor token's own scope requested in step 1.
     """
     data = {
         "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
@@ -50,6 +58,8 @@ async def token_exchange(
         "actor_token": actor_token,
         "actor_token_type": ACCESS_TOKEN_TYPE,
     }
+    if settings.resolved_token_exchange_scope:
+        data["scope"] = settings.resolved_token_exchange_scope
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             token_endpoint,

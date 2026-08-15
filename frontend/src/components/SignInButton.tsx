@@ -23,7 +23,7 @@ export function SignInButton({ me }: Props) {
         </div>
         <a
           href={api.logoutUrl}
-          className="rounded-full border border-border px-3 py-1.5 text-sm text-ink-muted transition hover:border-danger hover:text-danger"
+          className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-ink-muted transition hover:border-danger hover:text-danger"
         >
           Sign out
         </a>
@@ -34,7 +34,8 @@ export function SignInButton({ me }: Props) {
   return (
     <a
       href={api.loginUrl}
-      className="flex items-center gap-2 rounded-full bg-brand px-4 py-2 text-sm font-medium text-brand-ink shadow-sm transition hover:opacity-90"
+      style={{ backgroundImage: "var(--brand-gradient)" }}
+      className="flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold text-brand-ink shadow-sm transition hover:opacity-90"
     >
       Sign in with PingOne
     </a>

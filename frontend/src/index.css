@@ -1,50 +1,57 @@
 @import "tailwindcss";
 
 :root {
-  --canvas: #f5f6f8;
+  --canvas: #fbfbfc;
   --canvas-raised: #ffffff;
-  --ink: #14171c;
-  --ink-muted: #5b6472;
-  --border: #dde1e7;
-  --brand: #6d5bff;
+  --ink: #051727;
+  --ink-muted: #5a6b76;
+  --border: #dbe1e4;
+  --brand: #d20e0f;
+  --brand-gradient: linear-gradient(90deg, #d84332 0%, #d6311b 50%, #d20e0f 100%);
   --brand-ink: #ffffff;
-  --success: #1f9d55;
-  --danger: #d64545;
+  --success: #198754;
+  --danger: #dc3545;
   --danger-bg: #fdeaea;
-  --warning: #b98900;
+  --warning: #ffc107;
   --code-bg: #eef0f4;
 }
 
+/* Guarded with :not([data-theme="light"]) so an explicit light-mode toggle
+   can override a dark system preference — without this guard, this block's
+   plain :root selector ties with the base :root above and (being declared
+   later) always wins regardless of data-theme. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #0d0f13;
-    --canvas-raised: #15181f;
-    --ink: #eef0f4;
-    --ink-muted: #939aa8;
-    --border: #262b34;
-    --brand: #8b7bff;
-    --brand-ink: #0d0f13;
+  :root:not([data-theme="light"]) {
+    --canvas: #051727;
+    --canvas-raised: #0f1b26;
+    --ink: #fbfbfc;
+    --ink-muted: #a5bbc3;
+    --border: #263746;
+    --brand: #ff5a4a;
+    --brand-gradient: linear-gradient(90deg, #ff6f5f 0%, #ff4d3a 50%, #ff5a4a 100%);
+    --brand-ink: #051727;
     --success: #35c46f;
     --danger: #ef6666;
     --danger-bg: #2a1616;
     --warning: #e0ac2e;
-    --code-bg: #1b1f27;
+    --code-bg: #16232f;
   }
 }
 
 :root[data-theme="dark"] {
-  --canvas: #0d0f13;
-  --canvas-raised: #15181f;
-  --ink: #eef0f4;
-  --ink-muted: #939aa8;
-  --border: #262b34;
-  --brand: #8b7bff;
-  --brand-ink: #0d0f13;
+  --canvas: #051727;
+  --canvas-raised: #0f1b26;
+  --ink: #fbfbfc;
+  --ink-muted: #a5bbc3;
+  --border: #263746;
+  --brand: #ff5a4a;
+  --brand-gradient: linear-gradient(90deg, #ff6f5f 0%, #ff4d3a 50%, #ff5a4a 100%);
+  --brand-ink: #051727;
   --success: #35c46f;
   --danger: #ef6666;
   --danger-bg: #2a1616;
   --warning: #e0ac2e;
-  --code-bg: #1b1f27;
+  --code-bg: #16232f;
 }
 
 @theme inline {
@@ -60,7 +67,7 @@
   --color-danger-bg: var(--danger-bg);
   --color-warning: var(--warning);
   --color-code-bg: var(--code-bg);
-  --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Montserrat", system-ui, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
@@ -80,6 +87,34 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.22s ease-out both;
+}
+
+@keyframes typing-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
 }
 
 ::-webkit-scrollbar {

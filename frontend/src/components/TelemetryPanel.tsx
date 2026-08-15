@@ -35,7 +35,10 @@ export function TelemetryPanel() {
         ) : (
           <ul className="flex flex-col gap-2">
             {spans.map((span) => (
-              <li key={span.span_id} className="rounded-lg border border-border bg-canvas-raised p-2.5 text-xs">
+              <li
+                key={span.span_id}
+                className="animate-pop-in rounded-lg border border-border bg-canvas-raised p-2.5 text-xs"
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-mono font-medium text-ink">{span.name}</span>
                   <StatusBadge status={span.status} />
@@ -67,7 +70,7 @@ function StatusBadge({ status }: { status: string }) {
   const isError = status === "ERROR"
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase ${
+      className={`rounded-md px-2 py-0.5 text-[10px] font-medium uppercase ${
         isError ? "bg-danger-bg text-danger" : "bg-code-bg text-ink-muted"
       }`}
     >

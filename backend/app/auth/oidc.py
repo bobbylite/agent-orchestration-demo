@@ -49,7 +49,7 @@ async def get_metadata(settings: Settings) -> OidcMetadata:
     )
 
 
-async def _get_jwks(metadata: OidcMetadata):
+async def get_jwks(metadata: OidcMetadata):
     cached = _jwks_cache.get(metadata.jwks_uri)
     now = time.time()
     if cached and now - cached[0] < _JWKS_TTL_SECONDS:
@@ -115,7 +115,7 @@ async def verify_id_token(
     *,
     nonce: str,
 ) -> dict[str, Any]:
-    key_set = await _get_jwks(metadata)
+    key_set = await get_jwks(metadata)
     token = jwt.decode(id_token, key_set, algorithms=["RS256"])
     registry = JWTClaimsRegistry(
         iss={"essential": True, "value": metadata.issuer},

@@ -20,6 +20,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from pydantic import SecretStr
 
 from app.config import Settings
 
@@ -29,7 +30,17 @@ class AgentState(TypedDict):
 
 
 def _build_assistant_node(settings: Settings):
-    llm = ChatAnthropic(model=settings.agent_model, api_key=settings.anthropic_api_key)
+    # timeout/stop passed explicitly (at their real defaults) because
+    # langchain-anthropic declares them as `Field(None, alias=...)` —
+    # Pylance's pydantic plugin doesn't recognize that positional-default
+    # form and flags them as missing-required otherwise. Harmless either
+    # way; this just satisfies the type checker.
+    llm = ChatAnthropic(
+        model_name=settings.agent_model,
+        api_key=SecretStr(settings.anthropic_api_key or ""),
+        timeout=None,
+        stop=None,
+    )
 
     async def assistant(state: AgentState, config: RunnableConfig) -> AgentState:
         response = await llm.ainvoke(state["messages"], config=config)

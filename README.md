@@ -11,11 +11,18 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   Client Credentials, then combines that with the user's session token via
   [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693) into a
   single delegated token carrying both identities.
+- **Inbound auth (AgentCore-style)** — `/api/invoke` accepts *only* the
+  delegated token from token exchange, never the plain session token, and
+  re-verifies it fresh on every call (signature against PingOne's JWKS,
+  issuer, expiry, and audience) rather than trusting a session. This mirrors
+  AWS Bedrock AgentCore's inbound-auth model, where every request carries a
+  bearer JWT a JWT authorizer verifies statelessly — there's no notion of
+  "already logged in" at the agent boundary.
 - **OpenTelemetry** — every credential-bearing operation (login, logout,
-  agent auth, token exchange, agent invocation) emits a span. A redaction
-  filter drops any attribute whose key looks like `token`, `secret`,
-  `password`, or `authoriz*` before it's ever stored — the token itself never
-  appears on a span.
+  agent auth, token exchange, inbound-auth verification, agent invocation)
+  emits a span. A redaction filter drops any attribute whose key looks like
+  `token`, `secret`, `password`, or `authoriz*` before it's ever stored — the
+  token itself never appears on a span.
 - **LangGraph agent** — a single-node graph today (`assistant` → Claude),
   checkpointed per conversation thread, designed to grow into a multi-node
   graph with sidecar tool calls and multi-agent (A2A) handoff.
@@ -65,7 +72,14 @@ You need **two** PingOne applications:
 2. **Agent worker app** (Service/Worker app)
    - Grant types: **Client Credentials** and **Token Exchange**
    - Token endpoint auth method: `client_secret_basic`
-   - → `AGENT_CLIENT_ID`, `AGENT_CLIENT_SECRET`
+   - Define the resource scope(s) it can request, and set that resource's
+     **access token format to JWT** (not opaque/reference) — inbound auth
+     can only cryptographically verify a JWT
+   - → `AGENT_CLIENT_ID`, `AGENT_CLIENT_SECRET`, `AGENT_SCOPES` (actor
+     token, step 1), `AGENT_TOKEN_EXCHANGE_SCOPE` (delegated token, step 2
+     — falls back to `AGENT_SCOPES` if unset), `AGENT_EXPECTED_AUDIENCE`
+     (what inbound auth checks the delegated token's `aud` against — falls
+     back to `AGENT_CLIENT_ID`)
 
 Both blocks are independent — you can enable just the sign-in app first,
 add the agent app once that's working.
@@ -97,9 +111,12 @@ cross-site cookie configuration.
 - `backend/app/auth/agent_auth.py` — Client Credentials + Token Exchange.
 - `backend/app/auth/routes.py` — wires the above into
   `/api/auth/{login,callback,logout,agent-token,me}`.
-- `backend/app/agent/graph.py` — the LangGraph graph; `/api/invoke`
-  (`backend/app/routes/invoke.py`) streams it over SSE, requiring whichever
-  bearer token is available (delegated > session > none).
+- `backend/app/auth/inbound.py` — the inbound-auth check `/api/invoke`
+  (`backend/app/routes/invoke.py`) runs on every call: only the delegated
+  token is accepted, re-verified fresh (signature/issuer/expiry/audience),
+  never just trusted because it's sealed in a cookie.
+- `backend/app/agent/graph.py` — the LangGraph graph `/api/invoke` streams
+  over SSE once inbound auth passes.
 - `frontend/src/App.tsx` — owns conversation + auth state and the SSE read
   loop; `AgentAuthButton` is the one component that owns its own local state
   machine (idle/loading/success/error), everything else is presentational.

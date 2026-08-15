@@ -22,6 +22,7 @@ export function AgentAuthButton({ me, onAuthenticated }: Props) {
 
   const disabled = !me.signed_in || status === "loading"
   const authenticated = me.agent_authenticated && me.exchanged
+  const title = !me.signed_in ? "Sign in with PingOne first" : status === "error" ? (error ?? undefined) : undefined
 
   async function handleClick() {
     setStatus("loading")
@@ -37,28 +38,27 @@ export function AgentAuthButton({ me, onAuthenticated }: Props) {
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={disabled}
-        className="flex items-center gap-2 rounded-full border border-border px-4 py-2 text-sm font-medium text-ink transition hover:border-brand disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        {status === "loading" ? (
-          <>
-            <Spinner /> Authenticating…
-          </>
-        ) : authenticated ? (
-          <>
-            <span className="text-success">●</span> Agent Authenticated
-          </>
-        ) : (
-          "Authenticate Agent"
-        )}
-      </button>
-      {!me.signed_in && <span className="text-xs text-ink-muted">Sign in first</span>}
-      {status === "error" && error && <span className="max-w-64 text-right text-xs text-danger">{error}</span>}
-    </div>
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={disabled}
+      title={title}
+      className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-ink transition hover:border-brand disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {status === "loading" ? (
+        <>
+          <Spinner /> Authenticating…
+        </>
+      ) : authenticated ? (
+        <>
+          <span className="text-success">●</span> Agent Authenticated
+        </>
+      ) : status === "error" ? (
+        <span className="text-danger">Authentication failed — retry</span>
+      ) : (
+        "Authenticate Agent"
+      )}
+    </button>
   )
 }
 

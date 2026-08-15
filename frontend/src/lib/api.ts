@@ -80,7 +80,9 @@ export async function streamInvoke(
   while (true) {
     const { value, done } = await reader.read()
     if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    // sse-starlette frames events with CRLF; normalize before splitting so
+    // "\n\n" reliably matches the blank line between events.
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n")
 
     let sepIndex: number
     while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {

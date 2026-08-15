@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from "react"
+import { Markdown } from "./Markdown"
+import { TypingIndicator } from "./TypingIndicator"
 
 export interface ChatMessage {
   id: string
@@ -34,15 +36,26 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
         ) : (
           <div className="flex flex-col gap-4">
             {messages.map((message) => (
-              <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div
+                key={message.id}
+                className={`flex animate-pop-in ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              >
                 <div
-                  className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                  className={`max-w-[75%] rounded-lg px-4 py-2.5 ${
                     message.role === "user"
-                      ? "bg-brand text-brand-ink"
+                      ? "whitespace-pre-wrap bg-brand text-sm leading-relaxed text-brand-ink"
                       : "border border-border bg-canvas-raised text-ink"
                   }`}
                 >
-                  {message.content || (message.role === "assistant" ? "…" : "")}
+                  {message.role === "assistant" ? (
+                    message.content ? (
+                      <Markdown content={message.content} />
+                    ) : (
+                      <TypingIndicator />
+                    )
+                  ) : (
+                    message.content
+                  )}
                 </div>
               </div>
             ))}
@@ -55,12 +68,12 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
           onChange={(event) => setDraft(event.target.value)}
           placeholder={canSend ? "Message the agent…" : (disabledReason ?? "Sign in to chat")}
           disabled={!canSend}
-          className="flex-1 rounded-full border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none disabled:opacity-50"
+          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-brand focus:outline-none disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={!canSend || !draft.trim()}
-          className="rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-ink transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-md bg-brand px-5 py-2.5 text-sm font-semibold text-brand-ink transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send
         </button>

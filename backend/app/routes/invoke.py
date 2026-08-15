@@ -7,35 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.trace import Status, StatusCode
 from sse_starlette.sse import EventSourceResponse
 
-from app.auth.session import AGENT_TOKEN_COOKIE, EXCHANGED_TOKEN_COOKIE, SESSION_COOKIE, read_cookie
+from app.auth.inbound import InboundAuthError, InboundIdentity, verify_inbound_token
+from app.auth.session import EXCHANGED_TOKEN_COOKIE, read_cookie
 from app.config import Settings, get_settings
 from app.models import InvokeRequest
 from app.telemetry import with_span
 
 router = APIRouter(prefix="/api", tags=["invoke"])
-
-
-def _resolve_bearer(request: Request, settings: Settings) -> tuple[str | None, str]:
-    """Bearer priority: exchanged token > session token > none."""
-    exchanged = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
-    if exchanged and exchanged.get("access_token"):
-        return exchanged["access_token"], "exchanged"
-    session = read_cookie(request, SESSION_COOKIE, settings)
-    if session and session.get("access_token"):
-        return session["access_token"], "session"
-    return None, "none"
-
-
-def _identity_attributes(request: Request, settings: Settings, source: str) -> dict[str, Any]:
-    attributes: dict[str, Any] = {}
-    session = read_cookie(request, SESSION_COOKIE, settings)
-    if session and session.get("sub"):
-        attributes["identity.sub"] = session["sub"]
-    if source == "exchanged":
-        agent = read_cookie(request, AGENT_TOKEN_COOKIE, settings)
-        if agent and agent.get("client_id"):
-            attributes["identity.agent_client_id"] = agent["client_id"]
-    return attributes
 
 
 def _extract_text(content: Any) -> str:
@@ -50,17 +28,43 @@ def _extract_text(content: Any) -> str:
 
 @router.post("/invoke")
 async def invoke(request: Request, body: InvokeRequest, settings: Settings = Depends(get_settings)):
-    token, source = _resolve_bearer(request, settings)
+    # Inbound auth, AgentCore-style: only a delegated token from RFC 8693
+    # token exchange is accepted — a plain signed-in session is not enough,
+    # because its audience was never scoped to this agent. The token is
+    # re-verified fresh below rather than trusted just because it's sealed
+    # in one of our own cookies.
+    exchanged = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
+    token = exchanged.get("access_token") if exchanged else None
     if not token:
-        raise HTTPException(status_code=401, detail="Sign in and authenticate the agent before chatting.")
+        raise HTTPException(
+            status_code=401,
+            detail="Authenticate the agent (Client Credentials + Token Exchange) before chatting — "
+            "being signed in alone is not sufficient.",
+        )
+
+    with with_span("inbound_auth.verify") as auth_span:
+        try:
+            identity: InboundIdentity = await verify_inbound_token(token, settings)
+        except InboundAuthError as exc:
+            auth_span.set_attribute("inbound_auth.failure_reason", exc.reason)
+            auth_span.set_status(Status(StatusCode.ERROR, exc.reason))
+            raise HTTPException(status_code=401, detail=f"Inbound auth rejected the token: {exc.reason}") from exc
+        auth_span.set_attribute("identity.sub", identity.sub or "")
+        auth_span.set_attribute("identity.agent_client_id", identity.client_id or "")
+        if identity.actor_sub:
+            auth_span.set_attribute("identity.actor_sub", identity.actor_sub)
 
     graph = request.app.state.graph
-    identity = _identity_attributes(request, settings, source)
 
     async def event_stream() -> AsyncIterator[dict]:
         with with_span(
             "agent.invoke",
-            {"identity.token_source": source, "agent.thread_id": body.thread_id, **identity},
+            {
+                "identity.token_source": "exchanged",
+                "identity.sub": identity.sub or "",
+                "identity.agent_client_id": identity.client_id or "",
+                "agent.thread_id": body.thread_id,
+            },
         ) as span:
             try:
                 output_chars = 0

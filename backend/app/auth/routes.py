@@ -167,6 +167,7 @@ async def agent_token(
         with with_span("agent.client_credentials") as cc_span:
             actor_tokens = await client_credentials_grant(metadata.token_endpoint, settings)
             cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
+            cc_span.set_attribute("oauth.scope", settings.agent_scopes or "")
 
         set_sealed_cookie(
             response,
@@ -189,6 +190,7 @@ async def agent_token(
             )
             te_span.set_attribute("identity.sub", session.get("sub", ""))
             te_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
+            te_span.set_attribute("oauth.scope", settings.resolved_token_exchange_scope or "")
 
         set_sealed_cookie(
             response,

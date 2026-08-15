@@ -11,13 +11,16 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   Client Credentials, then combines that with the user's session token via
   [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693) into a
   single delegated token carrying both identities.
-- **Inbound auth (AgentCore-style)** — `/api/invoke` accepts *only* the
-  delegated token from token exchange, never the plain session token, and
-  re-verifies it fresh on every call (signature against PingOne's JWKS,
-  issuer, expiry, and audience) rather than trusting a session. This mirrors
-  AWS Bedrock AgentCore's inbound-auth model, where every request carries a
-  bearer JWT a JWT authorizer verifies statelessly — there's no notion of
-  "already logged in" at the agent boundary.
+- **Inbound auth (AgentCore-style), scoped to where it matters** — plain
+  chat only needs the signed-in session (it never touches a protected
+  resource). The moment the agent needs to act *on the user's behalf* — via
+  A2A delegation to the Task Agent — it needs the delegated token from
+  token exchange, re-verified fresh (signature against PingOne's JWKS,
+  issuer, expiry, and audience) rather than trusted from a session, mirroring
+  AWS Bedrock AgentCore's inbound-auth model at that boundary. If you ask
+  for something that needs delegation before authenticating, the chat
+  explains it and offers an inline "Authenticate Agent" prompt right there,
+  then automatically retries.
 - **OpenTelemetry** — every credential-bearing operation (login, logout,
   agent auth, token exchange, inbound-auth verification, agent invocation)
   emits a span. A redaction filter drops any attribute whose key looks like

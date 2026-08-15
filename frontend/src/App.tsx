@@ -19,7 +19,7 @@ export default function App() {
   const threadId = useRef(newId())
 
   const refreshMe = useCallback(() => {
-    api
+    return api
       .getMe()
       .then(setMe)
       .catch(() => setMe(null))
@@ -33,45 +33,64 @@ export default function App() {
     setRawEvents((prev) => [...prev.slice(-199), { id: newId(), event, data, at: Date.now() }])
   }
 
-  async function handleSend(content: string) {
-    const userMessage: ChatMessage = { id: newId(), role: "user", content }
-    const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "" }
-    setMessages((prev) => [...prev, userMessage, assistantMessage])
-    setSending(true)
+  function updateMessage(id: string, patch: Partial<ChatMessage>) {
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
+  }
 
+  // Shared by the initial send and the inline-authenticate retry — both are
+  // "run this user text through the graph and stream into this assistant
+  // message", just with different setup around them.
+  async function runTurn(content: string, assistantMessageId: string) {
+    setSending(true)
     try {
       await streamInvoke(threadId.current, content, {
         onToken: (text) => {
           setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: m.content + text } : m)),
+            prev.map((m) => (m.id === assistantMessageId ? { ...m, content: m.content + text } : m)),
           )
         },
+        onAuthRequired: () => updateMessage(assistantMessageId, { needsAgentAuth: true }),
         onDone: () => setSending(false),
         onError: (message) => {
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: `⚠ ${message}` } : m)),
-          )
+          updateMessage(assistantMessageId, { content: `⚠ ${message}` })
           setSending(false)
         },
         onRawEvent: pushRawEvent,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantMessage.id ? { ...m, content: `⚠ ${message}` } : m)),
-      )
+      updateMessage(assistantMessageId, { content: `⚠ ${message}` })
       setSending(false)
     }
   }
 
-  const canSend = Boolean(me?.exchanged) && !sending
+  async function handleSend(content: string) {
+    const userMessage: ChatMessage = { id: newId(), role: "user", content }
+    const assistantMessage: ChatMessage = { id: newId(), role: "assistant", content: "", sourceUserContent: content }
+    setMessages((prev) => [...prev, userMessage, assistantMessage])
+    await runTurn(content, assistantMessage.id)
+  }
+
+  // Authenticate inline, then automatically retry the same request — the
+  // point is "ask → authenticate → try again" as one flow, not a second
+  // manual step.
+  async function handleInlineAuthenticate(assistantMessageId: string, originalContent: string) {
+    await api.authenticateAgent()
+    await refreshMe()
+    updateMessage(assistantMessageId, { needsAgentAuth: false, content: "" })
+    await runTurn(originalContent, assistantMessageId)
+  }
+
+  // Plain chat only needs a signed-in session — see backend/app/routes/invoke.py.
+  // Delegating to the Task Agent (todos, etc.) needs the exchanged token too,
+  // but that's surfaced inline in the chat when it's actually needed, not
+  // gated here.
+  const canSend = Boolean(me?.signed_in) && !sending
   const disabledReason = !me?.oidc_enabled
     ? null
     : !me?.signed_in
       ? "Sign in with PingOne to start chatting."
-      : !me?.exchanged
-        ? "Authenticate the agent to start chatting — a signed-in session alone isn't enough."
-        : null
+      : null
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
@@ -90,7 +109,13 @@ export default function App() {
 
       <main className="flex min-h-0 flex-1">
         <section className="min-h-0 flex-1">
-          <ChatPanel messages={messages} canSend={canSend} disabledReason={disabledReason} onSend={handleSend} />
+          <ChatPanel
+            messages={messages}
+            canSend={canSend}
+            disabledReason={disabledReason}
+            onSend={handleSend}
+            onInlineAuthenticate={handleInlineAuthenticate}
+          />
         </section>
 
         <aside className="flex min-h-0 w-[30rem] shrink-0 flex-col border-l border-border bg-canvas-raised">

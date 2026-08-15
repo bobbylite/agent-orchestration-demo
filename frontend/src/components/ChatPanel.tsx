@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react"
+import { InlineAgentAuthPrompt } from "./InlineAgentAuthPrompt"
 import { Markdown } from "./Markdown"
 import { TypingIndicator } from "./TypingIndicator"
 
@@ -6,6 +7,12 @@ export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string
+  /** Set when the agent tried to act on the user's behalf without a
+   * delegated token — renders an inline "Authenticate Agent" prompt. */
+  needsAgentAuth?: boolean
+  /** For assistant messages: the user text that produced this turn, so a
+   * successful inline authentication can automatically retry it. */
+  sourceUserContent?: string
 }
 
 interface Props {
@@ -13,9 +20,10 @@ interface Props {
   canSend: boolean
   disabledReason: string | null
   onSend: (message: string) => void
+  onInlineAuthenticate: (assistantMessageId: string, originalContent: string) => Promise<void>
 }
 
-export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) {
+export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineAuthenticate }: Props) {
   const [draft, setDraft] = useState("")
 
   function handleSubmit(event: FormEvent) {
@@ -48,7 +56,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex animate-pop-in ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex animate-pop-in flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
                   className={`max-w-[75%] rounded-xl px-4 py-2.5 ${
@@ -67,6 +75,13 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
                     message.content
                   )}
                 </div>
+                {message.needsAgentAuth && (
+                  <div className="w-full max-w-[75%]">
+                    <InlineAgentAuthPrompt
+                      onAuthenticate={() => onInlineAuthenticate(message.id, message.sourceUserContent ?? "")}
+                    />
+                  </div>
+                )}
               </div>
             ))}
           </div>

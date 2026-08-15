@@ -50,6 +50,11 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
+  /** The agent tried to act on the user's behalf (e.g. via A2A) without a
+   * delegated token. Not an error — the turn continues normally and the
+   * model explains it in its own words; this is the deterministic signal
+   * for rendering an inline "Authenticate Agent" prompt. */
+  onAuthRequired?: () => void
   onRawEvent?: (event: string, data: string) => void
 }
 
@@ -102,6 +107,7 @@ export async function streamInvoke(
       if (eventName === "token") handlers.onToken(parsed.text)
       else if (eventName === "done") handlers.onDone()
       else if (eventName === "error") handlers.onError(parsed.message)
+      else if (eventName === "auth_required") handlers.onAuthRequired?.()
     }
   }
 }

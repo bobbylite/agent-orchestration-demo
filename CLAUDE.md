@@ -37,18 +37,37 @@ choice; it's the load-bearing decision behind the whole backend structure:
 
 - `backend/app/auth/inbound.py` (`verify_inbound_token`) re-verifies the
   bearer token *fresh on every call* — signature against PingOne's JWKS,
-  issuer, expiry, and **audience** — rather than trusting a session. This
-  runs in the FastAPI route handler (`backend/app/routes/invoke.py`)
-  *before* `graph.astream_events(...)` is ever called.
-- Signing in with PingOne alone is **not sufficient** to chat. The
-  "Authenticate Agent" step (Client Credentials → RFC 8693 Token Exchange)
-  is mandatory — `/api/invoke` only accepts the delegated (exchanged) token,
-  never the raw session token, because the session token's audience was
-  never scoped to the agent.
+  issuer, expiry, and **audience** — rather than trusting a session.
 - This intentionally mirrors AWS Bedrock AgentCore's inbound-auth model: a
   JWT authorizer sitting in front of the runtime, stateless, re-verified per
   request — not something the agent framework (LangGraph, in either case)
   implements or is trusted to enforce.
+
+**Two privilege tiers, not one blanket gate (revised 2026-08-15).** Plain
+chat never touches a protected resource, so the signed-in session cookie —
+already fully verified once, at OIDC login — is sufficient on its own;
+`/api/invoke` (`backend/app/routes/invoke.py`) no longer requires the
+exchanged token to answer at all. The exchanged token *is* still required,
+and still independently re-verified fresh via inbound auth, the moment the
+agent needs to act **on the user's behalf** — currently that's exactly the
+`ask_task_agent` call. If no delegated token is available at that point, the
+tool doesn't attempt the A2A call; it returns a sentinel
+(`NEEDS_AGENT_AUTH_MARKER`, `backend/app/agent/tools.py`) that
+`routes/invoke.py` detects via `on_tool_end` and turns into a dedicated
+`auth_required` SSE event — the frontend renders an inline "Authenticate
+Agent" prompt in that chat turn (`InlineAgentAuthPrompt.tsx`) and, once
+authenticated, automatically retries the same request. The model still gets
+the full sentence and explains it to the user in its own words; the SSE
+event is what the UI reacts to, not a parse of the model's prose.
+
+This is *not* a weakening of the AgentCore-inbound-auth story — the actual
+enforcement boundary (the Task Agent, where a protected resource is
+touched) is completely untouched: it still hard-rejects any call without a
+correctly-scoped, freshly-verified delegated token, independent of
+whatever the Chat Agent believes. What moved is where the *outer* gate
+sits, to match a real AgentCore deployment more precisely: session auth
+gets you to the agent, delegated/exchanged auth is what lets the agent act
+for you.
 
 **Rule for any future work**: if you're adding an authorization/policy
 check, it is a plain function/FastAPI dependency, not a graph node — even if
@@ -171,10 +190,14 @@ observed for free: `a2a-sdk` has its own OTel instrumentation
 ## What's built (as of 2026-08-15)
 
 - Sign in with PingOne (OIDC Authorization Code + PKCE S256, JWE-encrypted
-  session cookie).
-- Authenticate Agent (Client Credentials + RFC 8693 Token Exchange).
-- Inbound auth enforcement on `/api/invoke` (see above) — mandatory, not
-  optional; the session token alone is rejected.
+  session cookie) — sufficient on its own for plain chat.
+- Authenticate Agent (Client Credentials + RFC 8693 Token Exchange) —
+  required only for the agent to act on the user's behalf (A2A delegation),
+  enforced fresh via inbound auth at that point, not at the chat gate. See
+  "Two privilege tiers" above.
+- Inline in-chat authentication: asking for something that needs delegation
+  without having authenticated yet gets a graceful explanation plus an
+  `InlineAgentAuthPrompt` in that turn, which auto-retries on success.
 - OpenTelemetry spans + redaction + ring buffer, live in the Telemetry panel.
 - LangGraph chat agent (Claude), streamed over SSE, Markdown-rendered,
   per-thread checkpointed — now 2 nodes, with real A2A delegation to a

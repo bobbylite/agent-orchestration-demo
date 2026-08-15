@@ -19,6 +19,14 @@ from langchain_core.tools import tool
 
 from app.telemetry import with_span
 
+# Recognized by routes/invoke.py (checked against on_tool_end output) to emit
+# a deterministic `auth_required` SSE event — the frontend renders an inline
+# "Authenticate Agent" prompt off of that event, not by parsing whatever
+# prose the model wraps this content in. The model still sees the full
+# sentence and explains it to the user in its own words; the marker is just
+# for the frontend's benefit, model behavior doesn't depend on it.
+NEEDS_AGENT_AUTH_MARKER = "NEEDS_AGENT_AUTH"
+
 _STATE_LABELS = {
     TaskState.TASK_STATE_COMPLETED: "completed",
     TaskState.TASK_STATE_FAILED: "failed",
@@ -57,9 +65,21 @@ async def ask_task_agent(request: str, config: RunnableConfig) -> str:
             "identity.agent_client_id": caller_agent_client_id,
         },
     ) as span:
-        if not bearer_token or not task_agent_url:
+        if not task_agent_url:
             span.set_attribute("a2a.result", "misconfigured")
-            return "The Task Agent is not reachable right now (missing delegation credentials)."
+            return "The Task Agent is not reachable right now (missing configuration)."
+
+        if not bearer_token:
+            # Expected, common state — signing in alone doesn't authorize the
+            # agent to act on the user's behalf. Not an error: the user just
+            # needs to complete Client Credentials + Token Exchange first.
+            span.set_attribute("a2a.result", "needs_agent_auth")
+            return (
+                f"{NEEDS_AGENT_AUTH_MARKER}: To do anything with the user's todo list, the agent "
+                "must first authenticate itself and obtain a delegated token (RFC 8693 Token "
+                "Exchange) — being signed in alone doesn't authorize acting on the user's behalf. "
+                "Tell the user to click \"Authenticate Agent\" and then repeat their request."
+            )
 
         headers = {"Authorization": f"Bearer {bearer_token}"}
         async with httpx.AsyncClient(headers=headers, timeout=30) as httpx_client:

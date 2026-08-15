@@ -1,0 +1,8 @@
+{
+  "executionEnvironments": [
+    { "root": "mcp-todos-server", "venvPath": "mcp-todos-server", "venv": ".venv" },
+    { "root": "task-agent", "venvPath": "task-agent", "venv": ".venv" },
+    { "root": "shared", "venvPath": "backend", "venv": ".venv" },
+    { "root": "backend", "venvPath": "backend", "venv": ".venv" }
+  ]
+}

@@ -1,3 +1,7 @@
 {
-  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python"
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/mcp-todos-server/.venv/lib/python3.14/site-packages",
+    "${workspaceFolder}/task-agent/.venv/lib/python3.14/site-packages"
+  ]
 }

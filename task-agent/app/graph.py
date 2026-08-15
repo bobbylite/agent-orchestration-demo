@@ -21,6 +21,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import StreamableHttpConnection
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
@@ -37,7 +38,7 @@ class AgentState(TypedDict):
 
 
 async def _get_mcp_tools(settings: Settings, bearer_token: str | None) -> list:
-    connection: dict = {
+    connection: StreamableHttpConnection = {
         "transport": "streamable_http",
         "url": settings.mcp_todos_url,
     }

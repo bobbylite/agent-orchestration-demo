@@ -115,6 +115,9 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
           <SendIcon />
         </button>
       </form>
+      <p className="pb-3 text-center text-[11px] text-ink-muted">
+        Agent Orchestration Console is intended for demonstration purposes only. Identity for AI and orchestration is powered by Langchain and PingOne.
+      </p>
     </div>
   )
 }

@@ -146,3 +146,41 @@ body {
   background-color: var(--border);
   border-radius: 999px;
 }
+
+/* Architecture diagram (components/diagram/) — retheme React Flow's own
+   CSS-variable system (v12) onto our tokens instead of its default light
+   palette, so it follows light/dark automatically like everything else. */
+.react-flow {
+  --xy-background-color: var(--canvas);
+  --xy-background-pattern-dots-color-default: var(--border);
+  --xy-edge-stroke-default: var(--border);
+  --xy-edge-label-background-color-default: var(--canvas);
+  --xy-edge-label-color-default: var(--ink-muted);
+  --xy-controls-button-background-color: var(--canvas-raised);
+  --xy-controls-button-background-color-hover: var(--code-bg);
+  --xy-controls-button-color: var(--ink-muted);
+  --xy-controls-button-color-hover: var(--ink);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: var(--shadow-raised);
+  --xy-minimap-background-color-default: var(--canvas-raised);
+}
+
+.react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-raised);
+}
+
+.react-flow__controls-button {
+  border-bottom-color: var(--border) !important;
+}
+
+@keyframes diagram-flow {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.diagram-edge-flow {
+  animation: diagram-flow 0.6s linear infinite;
+}

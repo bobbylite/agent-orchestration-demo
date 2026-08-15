@@ -1,10 +1,18 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { api, type TelemetrySpan } from "../lib/api"
+
+// Lazy-loaded: React Flow is real weight (~150kB gzipped) that plain chat
+// usage should never pay for — only fetched once someone actually opens
+// the diagram.
+const ArchitectureDiagram = lazy(() =>
+  import("./diagram/ArchitectureDiagram").then((m) => ({ default: m.ArchitectureDiagram })),
+)
 
 const POLL_INTERVAL_MS = 2000
 
 export function TelemetryPanel() {
   const [spans, setSpans] = useState<TelemetrySpan[]>([])
+  const [diagramOpen, setDiagramOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -28,10 +36,26 @@ export function TelemetryPanel() {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
         <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">OpenTelemetry Spans</h2>
-        <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
-          {spans.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
+            {spans.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => setDiagramOpen(true)}
+            className="flex items-center gap-1.5 rounded-md border border-brand/30 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-brand transition hover:bg-brand/10"
+          >
+            <DiagramIcon />
+            Diagram
+          </button>
+        </div>
       </div>
+
+      {diagramOpen && (
+        <Suspense fallback={<DiagramLoadingOverlay />}>
+          <ArchitectureDiagram spans={spans} onClose={() => setDiagramOpen(false)} />
+        </Suspense>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {spans.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
@@ -88,5 +112,26 @@ function StatusBadge({ status }: { status: string }) {
     >
       {status}
     </span>
+  )
+}
+
+function DiagramLoadingOverlay() {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] backdrop-blur-sm">
+      <div className="rounded-xl border border-border bg-canvas-raised px-5 py-3.5 text-sm text-ink-muted shadow-raised">
+        Loading diagram…
+      </div>
+    </div>
+  )
+}
+
+function DiagramIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1" y="2" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="10.5" y="2" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="5.75" y="9.5" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M3.25 6.5V8a1 1 0 0 0 1 1H8m4.75-2.5V8a1 1 0 0 1-1 1H8m0 0v.5" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
   )
 }

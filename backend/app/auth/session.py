@@ -15,9 +15,9 @@ from fastapi import Request, Response
 
 from app.config import Settings
 
-SESSION_COOKIE = "agentcore_session"
-AGENT_TOKEN_COOKIE = "agentcore_agent_token"
-EXCHANGED_TOKEN_COOKIE = "agentcore_exchanged_token"
+SESSION_COOKIE = "agentorchestration_session"
+AGENT_TOKEN_COOKIE = "agentorchestration_agent_token"
+EXCHANGED_TOKEN_COOKIE = "agentorchestration_exchanged_token"
 
 _SESSION_MAX_AGE = 8 * 60 * 60  # 8h
 

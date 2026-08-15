@@ -24,7 +24,7 @@ Two worked examples already in this repo, copy their shape for anything new:
   `task-agent/app/agent_executor.py`'s `TaskAgentExecutor.execute()` does
   the same thing before `graph.ainvoke(...)` — pulls the bearer token from
   `context.call_context.state["headers"]`, verifies via
-  `agentcore_shared.verify_bearer_token`, fails the A2A task
+  `agentorchestration_shared.verify_bearer_token`, fails the A2A task
   (`task_updater.failed(...)`) before the graph runs if it doesn't check out.
 - **Tool-level policy ACL**: `task-agent/app/policy.py`'s `check()` is a
   plain dict lookup, wired into `task-agent/app/graph.py`'s `ToolNode` via
@@ -125,7 +125,7 @@ the same-audience token for every scope).
 - **A third agent**: give it its own directory (sibling to `task-agent/`),
   its own `AgentCard`/`AgentExecutor`/graph following `task-agent/app/`'s
   shape exactly, and its own inbound-auth check calling
-  `agentcore_shared.verify_bearer_token` — don't reimplement verification.
+  `agentorchestration_shared.verify_bearer_token` — don't reimplement verification.
   Whether it shares the Chat Agent's audience or gets a distinct one
   (requiring a fresh token exchange) is the same open question as above.
 

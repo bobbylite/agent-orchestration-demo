@@ -15,7 +15,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.tasks import TaskUpdater
 from a2a.types import TaskState
-from agentcore_shared import InboundAuthError, verify_bearer_token
+from agentorchestration_shared import InboundAuthError, verify_bearer_token
 from langgraph.graph.state import CompiledStateGraph
 
 from app.config import Settings

@@ -1,6 +1,6 @@
-"""Inbound auth for /api/invoke — thin adapter over agentcore_shared's
+"""Inbound auth for /api/invoke — thin adapter over agentorchestration_shared's
 verifier, wiring this service's Settings into it. See
-shared/src/agentcore_shared/inbound_auth.py for what's actually enforced
+shared/src/agentorchestration_shared/inbound_auth.py for what's actually enforced
 (signature/issuer/expiry/audience, re-checked fresh on every call — no
 "session" trust) and why it's shared unmodified across services rather than
 reimplemented per service.
@@ -8,7 +8,7 @@ reimplemented per service.
 
 from __future__ import annotations
 
-from agentcore_shared import InboundAuthError, VerifiedIdentity, verify_bearer_token
+from agentorchestration_shared import InboundAuthError, VerifiedIdentity, verify_bearer_token
 
 from app.config import Settings
 

@@ -1,0 +1,115 @@
+# Container image registry shared by all services.
+# Build and push each service image with the matching name below, e.g.:
+#   docker build -t ghcr.io/bobbylite/agentorchestration-backend:latest -f backend/Dockerfile .
+#   docker push ghcr.io/bobbylite/agentorchestration-backend:latest
+image:
+  registry: ghcr.io/bobbylite
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Override the fully-qualified name prefix used for all Kubernetes resource names.
+# Useful to shorten the default "<release>-<chart>" prefix.
+# Example: fullnameOverride: "agentorchestration"
+fullnameOverride: ""
+
+# ---------------------------------------------------------------------------
+# Backend (Chat Agent — FastAPI + LangGraph)
+# ---------------------------------------------------------------------------
+backend:
+  image: agentorchestration-backend
+  replicaCount: 1
+
+  # Non-sensitive environment — safe to commit in values overrides.
+  env:
+    APP_BASE_URL: "http://localhost"
+    FRONTEND_ORIGIN: "http://localhost"
+    OIDC_DISCOVERY_URL: ""
+    OIDC_CLIENT_ID: ""
+    OIDC_SCOPES: "openid profile email"
+    OIDC_POST_LOGOUT_REDIRECT_URI: "http://localhost"
+    AGENT_CLIENT_ID: ""
+    AGENT_SCOPES: ""
+    AGENT_EXPECTED_AUDIENCE: ""
+    TODOS_READ_SCOPE: "todos:read"
+    TODOS_WRITE_SCOPE: "todos:write"
+    AGENT_MODEL: "claude-sonnet-5"
+    # Resolved at render time to the task-agent's cluster-internal Service name.
+    TASK_AGENT_URL: ""  # defaults to http://<release>-task-agent:9010 if left blank
+
+  # Sensitive values — supply via --set or a sealed-secrets overlay; never commit.
+  secrets:
+    OIDC_CLIENT_SECRET: ""
+    AGENT_CLIENT_SECRET: ""
+    SESSION_SECRET: ""
+    ANTHROPIC_API_KEY: ""
+
+  service:
+    port: 8000
+
+  resources: {}
+
+# ---------------------------------------------------------------------------
+# Task Agent (specialist A2A server — FastAPI + LangGraph + a2a-sdk)
+# ---------------------------------------------------------------------------
+taskAgent:
+  image: agentorchestration-task-agent
+  replicaCount: 1
+
+  env:
+    OIDC_DISCOVERY_URL: ""
+    AGENT_EXPECTED_AUDIENCE: ""
+    ALLOWED_AGENT_CLIENT_ID: ""
+    TODOS_READ_SCOPE: "todos:read"
+    TODOS_WRITE_SCOPE: "todos:write"
+    AGENT_MODEL: "claude-sonnet-5"
+    HOST: "0.0.0.0"
+    PORT: "9010"
+    # Resolved at render time to the cluster-internal Service name.
+    PUBLIC_URL: ""      # defaults to http://<release>-task-agent:9010 if left blank
+    MCP_TODOS_URL: ""   # defaults to http://<release>-mcp-todos-server:9000/mcp if left blank
+
+  secrets:
+    ANTHROPIC_API_KEY: ""
+
+  service:
+    port: 9010
+
+  resources: {}
+
+# ---------------------------------------------------------------------------
+# MCP Todos Server (trusted-internal fastmcp Streamable HTTP server)
+# ---------------------------------------------------------------------------
+mcpTodosServer:
+  image: agentorchestration-mcp-todos
+  replicaCount: 1
+
+  service:
+    port: 9000
+
+  resources: {}
+
+# ---------------------------------------------------------------------------
+# Frontend (React + Vite → nginx)
+# ---------------------------------------------------------------------------
+frontend:
+  image: agentorchestration-frontend
+  replicaCount: 1
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  resources: {}
+
+# ---------------------------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  # annotations:
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  host: "agentorchestration.local"
+  tls:
+    enabled: false
+    secretName: ""

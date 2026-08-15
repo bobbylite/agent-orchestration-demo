@@ -9,12 +9,12 @@ WORKDIR /app
 COPY shared/ /shared/
 
 # Install dependencies first so this layer is cached across app-code changes.
-COPY backend/pyproject.toml backend/uv.lock ./
+COPY task-agent/pyproject.toml task-agent/uv.lock ./
 RUN uv sync --locked --no-dev
 
-COPY backend/app ./app
+COPY task-agent/app ./app
 
 ENV PATH="/app/.venv/bin:${PATH}"
-EXPOSE 8000
+EXPOSE 9010
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9010"]

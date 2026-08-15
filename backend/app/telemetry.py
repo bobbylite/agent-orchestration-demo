@@ -67,7 +67,7 @@ def init_telemetry() -> None:
     global _tracer_provider
     if _tracer_provider is not None:
         return
-    resource = Resource.create({"service.name": "agentcore-console-backend"})
+    resource = Resource.create({"service.name": "agentorchestration-console-backend"})
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(RecordingSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
@@ -79,7 +79,7 @@ def get_recent_spans() -> list[dict[str, Any]]:
     return list(_recent_spans)
 
 
-_tracer = trace.get_tracer("agentcore.console")
+_tracer = trace.get_tracer("agentorchestration.console")
 
 
 @contextmanager

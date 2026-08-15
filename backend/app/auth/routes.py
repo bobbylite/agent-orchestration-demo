@@ -148,7 +148,7 @@ async def logout(request: Request, settings: Settings = Depends(get_settings)) -
 
 _EXCHANGED_COOKIE_MAX_AGE = 8 * 60 * 60  # matches SESSION_COOKIE; individual
 # tokens are re-verified against their own `exp` claim on every use anyway
-# (see agentcore_shared.verify_bearer_token), so this is just a ceiling.
+# (see agentorchestration_shared.verify_bearer_token), so this is just a ceiling.
 
 
 @router.post("/agent-token")

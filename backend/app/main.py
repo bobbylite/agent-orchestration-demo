@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="AgentCore Console (LangGraph)", lifespan=lifespan)
+app = FastAPI(title="Agent Orchestration Console (LangGraph)", lifespan=lifespan)
 
 _settings = get_settings()
 app.add_middleware(

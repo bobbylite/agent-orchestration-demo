@@ -1,9 +1,9 @@
 ---
 name: run
-description: Launch the AgentCore Console (Chat Agent backend + Vite frontend + Task Agent + MCP todos server) for local development, or verify it's running. Use whenever asked to run, start, test, or screenshot this app.
+description: Launch the Agent Orchestration Console (Chat Agent backend + Vite frontend + Task Agent + MCP todos server) for local development, or verify it's running. Use whenever asked to run, start, test, or screenshot this app.
 ---
 
-# Running AgentCore Console locally
+# Running Agent Orchestration Console locally
 
 Up to four services, four terminals (or background Bash calls) — the
 first two are the minimum for basic chat; add the last two if you need

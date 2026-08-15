@@ -1,5 +1,5 @@
 [project]
-name = "agentcore-shared"
+name = "agentorchestration-shared"
 version = "0.1.0"
 description = "Shared inbound-auth verification used by every agent service in this repo"
 requires-python = ">=3.14"

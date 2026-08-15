@@ -1,23 +1,52 @@
 services:
   backend:
-    build: ./backend
+    build:
+      # Repo root so the Dockerfile can COPY shared/ alongside backend/
+      context: .
+      dockerfile: backend/Dockerfile
     env_file:
       - path: ./backend/.env
         required: false
     environment:
       APP_BASE_URL: ${PUBLIC_ORIGIN:-http://localhost:8080}
       FRONTEND_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:8080}
+      TASK_AGENT_URL: http://task-agent:9010
     expose:
       - "8000"
+    depends_on:
+      task-agent:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
 
+  task-agent:
+    build:
+      context: .
+      dockerfile: task-agent/Dockerfile
+    env_file:
+      - path: ./task-agent/.env
+        required: false
+    environment:
+      MCP_TODOS_URL: http://mcp-todos-server:9000/mcp
+      PUBLIC_URL: http://task-agent:9010
+    expose:
+      - "9010"
+    depends_on:
+      mcp-todos-server:
+        condition: service_started
+
+  mcp-todos-server:
+    build: ./mcp-todos-server
+    expose:
+      - "9000"
+
   frontend:
     build: ./frontend
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "8080:80"

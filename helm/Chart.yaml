@@ -1,0 +1,14 @@
+apiVersion: v2
+name: agentorchestration-console
+description: >
+  PingOne-authenticated LangGraph chat console — Chat Agent (backend),
+  Task Agent (a2a-sdk), MCP Todos Server, and React frontend.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - langchain
+  - langgraph
+  - a2a
+  - mcp
+  - pingone

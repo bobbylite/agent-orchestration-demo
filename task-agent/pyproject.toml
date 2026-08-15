@@ -11,11 +11,11 @@ dependencies = [
     "langgraph>=0.2.45",
     "langchain-anthropic>=0.3.0",
     "langchain-mcp-adapters>=0.3.0",
-    "agentcore-shared",
+    "agentorchestration-shared",
 ]
 
 [tool.uv.sources]
-agentcore-shared = { path = "../shared", editable = true }
+agentorchestration-shared = { path = "../shared", editable = true }
 
 [tool.uv]
 package = false

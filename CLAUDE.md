@@ -1,4 +1,4 @@
-# AgentCore Console (LangGraph edition)
+# Agent Orchestration Console (LangGraph edition)
 
 A PingOne-authenticated chat console for a LangGraph agent. Python/FastAPI +
 React rebuild of [digital-assistant-demo](https://github.com/bobbylite/digital-assistant-demo),
@@ -17,7 +17,7 @@ backend/            Chat Agent — FastAPI + LangGraph + OpenTelemetry, Python 3
 frontend/            React 19 + Vite 8 (rolldown) + Tailwind v4, Node >=22.12
 task-agent/          Specialist Agent — separate process, own A2A server (a2a-sdk)
 mcp-todos-server/    Standalone MCP server (fastmcp, Streamable HTTP) — mocked todos tool
-shared/              agentcore_shared — inbound-auth verification, used by backend + task-agent
+shared/              agentorchestration_shared — inbound-auth verification, used by backend + task-agent
 ```
 
 Everything was deliberately scaffolded on latest-stable versions, not
@@ -107,7 +107,7 @@ storytelling purposes. `task-agent/app/policy.py`'s `check()` (identity ACL
 touched, is the worked example — copy that shape, don't reinvent it.
 
 Inbound-auth verification itself is shared, not reimplemented per service:
-`shared/src/agentcore_shared/inbound_auth.py`'s `verify_bearer_token()` is
+`shared/src/agentorchestration_shared/inbound_auth.py`'s `verify_bearer_token()` is
 used by both `backend/app/auth/inbound.py` (thin `Settings`-aware adapter)
 and `task-agent/app/agent_executor.py` (calls it directly). If you touch
 verification logic, change it there once — don't patch either call site
@@ -185,7 +185,7 @@ calls `graph.ainvoke(...)`, passing the verified `client_id` *and*
 The Chat Agent does **not** mint a new/nested token for the Task Agent
 call — it forwards the exact same RFC 8693 delegated token it already holds.
 The Task Agent independently re-verifies that token itself (same
-`agentcore_shared.verify_bearer_token`, same issuer/audience config,
+`agentorchestration_shared.verify_bearer_token`, same issuer/audience config,
 duplicated across `backend/.env` and `task-agent/.env` on purpose — see
 "Known gotchas"). This is deliberate: it proves the Task Agent trusts
 nothing about the caller except a credential it can verify itself, which is

@@ -1,5 +1,5 @@
 [project]
-name = "agentcore-console-backend"
+name = "agentorchestration-console-backend"
 version = "0.1.0"
 description = "PingOne-authenticated LangGraph chat console backend"
 requires-python = ">=3.14"
@@ -15,12 +15,12 @@ dependencies = [
     "langgraph>=0.2.45",
     "langchain-anthropic>=0.3.0",
     "sse-starlette>=2.1",
-    "agentcore-shared",
+    "agentorchestration-shared",
     "a2a-sdk>=1.1.0",
 ]
 
 [tool.uv.sources]
-agentcore-shared = { path = "../shared", editable = true }
+agentorchestration-shared = { path = "../shared", editable = true }
 
 [tool.uv]
 package = false

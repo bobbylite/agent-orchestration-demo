@@ -1,4 +1,4 @@
-# AgentCore Console (LangGraph edition)
+# Agent Orchestration Console (LangGraph edition)
 
 A PingOne-authenticated chat console for a LangGraph agent — a Python/FastAPI +
 React rebuild of [digital-assistant-demo](https://github.com/bobbylite/digital-assistant-demo),
@@ -170,7 +170,7 @@ cross-site cookie configuration.
 - `backend/app/agent/tools.py` — the two delegation tools: real A2A client
   calls to the Task Agent, each forwarding the delegated token for its own
   scope specifically (`config["configurable"]["bearer_tokens"][scope]`).
-- `shared/src/agentcore_shared/inbound_auth.py` — the inbound-auth
+- `shared/src/agentorchestration_shared/inbound_auth.py` — the inbound-auth
   verification both `backend/` and `task-agent/` use (imported, not
   duplicated) — signature/issuer/expiry/audience/scope, checked fresh every call.
 - `task-agent/app/agent_executor.py` — the Task Agent's A2A `AgentExecutor`:

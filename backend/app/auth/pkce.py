@@ -16,7 +16,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app.config import Settings
 
-OIDC_STATE_COOKIE = "agentcore_oidc_state"
+OIDC_STATE_COOKIE = "agentorchestration_oidc_state"
 _STATE_MAX_AGE_SECONDS = 600
 
 

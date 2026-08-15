@@ -1,33 +1,35 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { api, type AuditEntry } from "../lib/api"
-
-const POLL_INTERVAL_MS = 2000
+import { RefreshButton } from "./RefreshButton"
 
 interface Props {
   signedIn: boolean
+  /** Bumped by the parent whenever a local action (add/complete a todo)
+   * just happened — refetches then, instead of polling on a timer. An
+   * agent-driven (OBO) entry from another tab shows up on the next manual
+   * refresh, not automatically; see CLAUDE.md. */
+  refreshSignal: number
 }
 
-export function AuditLogPanel({ signedIn }: Props) {
+export function AuditLogPanel({ signedIn, refreshSignal }: Props) {
   const [entries, setEntries] = useState<AuditEntry[]>([])
+  const [refreshing, setRefreshing] = useState(false)
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const { entries: latest } = await api.getAudit()
+      setEntries(latest)
+    } catch {
+      // best-effort; the user can retry via the refresh button
+    } finally {
+      setRefreshing(false)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!signedIn) return
-    let cancelled = false
-    async function poll() {
-      try {
-        const { entries: latest } = await api.getAudit()
-        if (!cancelled) setEntries(latest)
-      } catch {
-        // audit is best-effort to display; a failed poll just tries again next tick
-      }
-    }
-    poll()
-    const id = setInterval(poll, POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [signedIn])
+    if (signedIn) refresh()
+  }, [signedIn, refreshSignal, refresh])
 
   if (!signedIn) {
     return (
@@ -49,9 +51,12 @@ export function AuditLogPanel({ signedIn }: Props) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
         <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Audit Log</h2>
-        <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
-          {entries.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
+            {entries.length}
+          </span>
+          <RefreshButton onClick={refresh} refreshing={refreshing} label="Refresh audit log" />
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">

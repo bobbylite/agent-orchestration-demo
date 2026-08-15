@@ -3,7 +3,15 @@ same "a verified session is sufficient for a non-delegated action" tier
 the chat app already uses for plain chat (see CLAUDE.md's "core
 architectural decision" — two privilege tiers, not one blanket gate).
 Calls the same app/store.py functions the MCP tools use, tagged
-created_by="human", and writes one audit entry per action.
+created_by="human".
+
+Mutations (add/complete) write an audit entry — those are meaningful
+"someone did something" events. A plain list read of your own data is not:
+it's not a delegated (OBO) action and carries no security signal beyond
+"you looked at your own list", so list_todos_route deliberately does NOT
+audit-log — the frontend polls this route, and logging every poll tick
+would flood the audit log with noise that drowns out the OBO entries the
+log actually exists to surface.
 """
 
 from __future__ import annotations
@@ -31,14 +39,7 @@ def _require_session(request: Request, settings: Settings) -> dict:
 
 @router.get("")
 async def list_todos_route(request: Request, settings: Settings = Depends(get_settings)) -> dict:
-    session = _require_session(request, settings)
-    audit.record(
-        actor_type="human",
-        tool="list_todos",
-        outcome="success",
-        on_behalf_of_sub=session.get("sub"),
-        on_behalf_of_label=session.get("email") or session.get("name"),
-    )
+    _require_session(request, settings)
     return {"todos": store.list_todos()}
 
 

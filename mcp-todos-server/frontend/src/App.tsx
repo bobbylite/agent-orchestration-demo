@@ -7,6 +7,13 @@ import { api, type MeResponse } from "./lib/api"
 
 export default function App() {
   const [me, setMe] = useState<MeResponse | null>(null)
+  // Bumped whenever something worth showing in the audit log just
+  // happened (an add/complete in this UI) or the user asks for a manual
+  // refresh — AuditLogPanel re-fetches when this changes instead of
+  // polling on a fixed interval. See CLAUDE.md/README: only meaningful
+  // actions refresh the log, not a timer.
+  const [activityVersion, setActivityVersion] = useState(0)
+  const bumpActivity = useCallback(() => setActivityVersion((v) => v + 1), [])
 
   const refreshMe = useCallback(() => {
     return api
@@ -37,11 +44,11 @@ export default function App() {
 
       <main className="flex min-h-0 flex-1">
         <section className="min-h-0 flex-1 border-r border-border bg-canvas-raised">
-          <TodoPanel signedIn={signedIn} />
+          <TodoPanel signedIn={signedIn} onActivity={bumpActivity} />
         </section>
 
         <aside className="flex min-h-0 w-[30rem] shrink-0 flex-col bg-canvas-raised">
-          <AuditLogPanel signedIn={signedIn} />
+          <AuditLogPanel signedIn={signedIn} refreshSignal={activityVersion} />
         </aside>
       </main>
     </div>

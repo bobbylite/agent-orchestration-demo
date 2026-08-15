@@ -1,36 +1,40 @@
-import { useEffect, useState, type FormEvent } from "react"
+import { useCallback, useEffect, useState, type FormEvent } from "react"
 import { api, type Todo } from "../lib/api"
+import { RefreshButton } from "./RefreshButton"
 import { TodoItem } from "./TodoItem"
-
-const POLL_INTERVAL_MS = 3000
 
 interface Props {
   signedIn: boolean
+  /** Called after a todo is added or completed here — lets the parent
+   * refresh anything else that should reflect it (the audit log) without
+   * either panel polling on a timer. */
+  onActivity: () => void
 }
 
-export function TodoPanel({ signedIn }: Props) {
+export function TodoPanel({ signedIn, onActivity }: Props) {
   const [todos, setTodos] = useState<Todo[]>([])
   const [draft, setDraft] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
 
+  const refresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const { todos: latest } = await api.getTodos()
+      setTodos(latest)
+    } catch {
+      // best-effort; the user can retry via the refresh button
+    } finally {
+      setRefreshing(false)
+    }
+  }, [])
+
+  // Fetched once on sign-in, not polled — an agent-driven change made
+  // from the chat app in another tab won't appear until an action here or
+  // a manual refresh, by design (see CLAUDE.md).
   useEffect(() => {
-    if (!signedIn) return
-    let cancelled = false
-    async function poll() {
-      try {
-        const { todos: latest } = await api.getTodos()
-        if (!cancelled) setTodos(latest)
-      } catch {
-        // best-effort; retried next tick
-      }
-    }
-    poll()
-    const id = setInterval(poll, POLL_INTERVAL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [signedIn])
+    if (signedIn) refresh()
+  }, [signedIn, refresh])
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -41,8 +45,9 @@ export function TodoPanel({ signedIn }: Props) {
       const todo = await api.addTodo(text)
       setTodos((prev) => [...prev, todo])
       setDraft("")
+      onActivity()
     } catch {
-      // best-effort; the next poll will reconcile either way
+      // best-effort; a manual refresh will reconcile either way
     } finally {
       setSubmitting(false)
     }
@@ -52,8 +57,9 @@ export function TodoPanel({ signedIn }: Props) {
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: true } : t)))
     try {
       await api.completeTodo(id)
+      onActivity()
     } catch {
-      // best-effort; the next poll reconciles if this actually failed
+      // best-effort; a manual refresh reconciles if this actually failed
     }
   }
 
@@ -78,9 +84,12 @@ export function TodoPanel({ signedIn }: Props) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
         <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Todos</h2>
-        <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
-          {todos.length}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
+            {todos.length}
+          </span>
+          <RefreshButton onClick={refresh} refreshing={refreshing} label="Refresh todos" />
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">

@@ -39,6 +39,10 @@ class VerifiedIdentity:
     sub: str | None
     client_id: str | None
     actor_sub: str | None  # RFC 8693 `act.sub`, if the issuer populates it
+    scope: str | None  # raw `scope` claim, space-delimited per RFC 6749 §3.3
+
+    def has_scope(self, required: str) -> bool:
+        return required in (self.scope or "").split()
 
 
 async def _get_issuer_and_jwks_uri(discovery_url: str) -> tuple[str, str]:
@@ -110,4 +114,5 @@ async def verify_bearer_token(token: str, *, discovery_url: str, expected_audien
         sub=claims.get("sub"),
         client_id=claims.get("client_id"),
         actor_sub=actor_sub,
+        scope=claims.get("scope"),
     )

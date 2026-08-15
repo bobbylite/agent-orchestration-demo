@@ -44,9 +44,11 @@ Same two-node ReAct loop shape in both (prebuilt `ToolNode` +
 `tools_condition`, not hand-rolled):
 
 **Chat Agent** (`backend/app/agent/graph.py`) — `assistant` (Claude, tools
-bound via `bind_tools()`) ↔ `tools` (`ToolNode([ask_task_agent])`). The
-`assistant` → `tools` → `assistant` → `END` loop is standard
-`langgraph.prebuilt` usage; nothing bespoke.
+bound via `bind_tools()`) ↔ `tools`
+(`ToolNode([ask_task_agent_read, ask_task_agent_write])`). Two tools, not
+one with a read/write parameter — the model's own tool *choice* is the
+read/write signal. The `assistant` → `tools` → `assistant` → `END` loop is
+standard `langgraph.prebuilt` usage; nothing bespoke.
 
 **Task Agent** (`task-agent/app/graph.py`, separate process, own A2A
 server) — `task_assistant` (Claude, tools bound from
@@ -54,43 +56,72 @@ server) — `task_assistant` (Claude, tools bound from
 `execute_tool` (`ToolNode(tools, awrap_tool_call=_policy_wrap_tool_call)`).
 
 **The actual cross-process hop**: `backend/app/agent/tools.py`'s
-`ask_task_agent` — an `@tool async def` (not a graph node itself; it's what
-`ToolNode` executes) that reads `bearer_token`/`task_agent_url` off
-`RunnableConfig["configurable"]` (injected by giving the tool function a
-`config: RunnableConfig` parameter — LangChain auto-injects it and hides it
-from the tool's schema) and makes a *real* A2A client call via
-`a2a.client.create_client(...)`. Not an in-process function call to
-anything in `task-agent/`.
+`ask_task_agent_read`/`ask_task_agent_write` — thin `@tool async def`
+wrappers (not graph nodes themselves; they're what `ToolNode` executes)
+around a shared `_delegate(request, config, *, scope)` helper. Each reads
+its own scope's token from `config["configurable"]["bearer_tokens"][scope]`
+(a dict keyed by scope, not a single token) — injected by giving the tool
+function a `config: RunnableConfig` parameter, which LangChain
+auto-populates and hides from the tool's schema — and makes a *real* A2A
+client call via `a2a.client.create_client(...)`. Not an in-process function
+call to anything in `task-agent/`.
 
-### Identity propagation (why this is a stronger demo than it looks)
+### Per-action scoped delegation (why this is a stronger demo than it looks)
 
-The Chat Agent forwards the *same* delegated (RFC 8693 exchanged) token it
-already verified for its own `/api/invoke` inbound auth — threaded through
-via `config["configurable"]["bearer_token"]`, set in
-`backend/app/routes/invoke.py`. No new/nested token is minted. The Task
-Agent independently re-verifies that same token (same
-`agentcore_shared.verify_bearer_token`, same issuer/audience) before it
-will act — it extends zero implicit trust to the Chat Agent's own prior
-verification. `backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL`
-and `AGENT_EXPECTED_AUDIENCE` must match exactly for this to work; a
-mismatch fails with a genuinely correct `audience_mismatch`/
-`issuer_mismatch`, not a bug.
+There is no single "the agent is authenticated" state. Delegation is scoped
+per action (`todos:read` / `todos:write` — see `Settings.todos_read_scope`
+/ `todos_write_scope`), each approved independently via its own RFC 8693
+Token Exchange (`POST /api/auth/agent-token {"scope": "..."}`,
+`backend/app/auth/routes.py`), the first time that specific scope is
+needed. `backend/app/auth/session.py`'s `EXCHANGED_TOKEN_COOKIE` holds a
+**dict keyed by scope**, not one token — approving `todos:read` never
+grants `todos:write`.
+
+When a tool needs a scope with no entry in that dict yet, it returns
+`NEEDS_AGENT_AUTH_MARKER` (`backend/app/agent/tools.py`); `routes/invoke.py`
+maps the firing tool name back to its required scope and emits an
+`auth_required` SSE event carrying `{"scope": "..."}`. The frontend's
+`InlineAgentApprovalPrompt.tsx` renders off that event, scoped to exactly
+that one action.
+
+The Chat Agent forwards the delegated token for whichever scope a tool
+needs — never a new/nested token, and never a token for a *different*
+scope than what's needed. The Task Agent independently re-verifies both the
+token **and its `scope` claim** (`shared/inbound_auth.VerifiedIdentity.scope`,
+checked in `task-agent/app/policy.py`) before it will act on a given tool —
+it extends zero implicit trust to the Chat Agent's own prior verification
+*or* to whichever token the Chat Agent happened to attach. Verified this
+holds adversarially: a validly-signed, correctly-audienced token scoped
+only `todos:read`, sent directly to the Task Agent bypassing the Chat
+Agent's own tool availability, asking it to write, was independently
+rejected with no mutation.
+
+`backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL`,
+`AGENT_EXPECTED_AUDIENCE`, `TODOS_READ_SCOPE`, and `TODOS_WRITE_SCOPE` must
+all match exactly for this to work; a mismatch fails with a genuinely
+correct `audience_mismatch`/`issuer_mismatch`, not a bug.
 
 A real next step, not yet built: the Task Agent expecting a *narrower*,
-distinct audience of its own, which would require the Chat Agent to do a
-second RFC 8693 token exchange before delegating (true nested/rescoped
-delegation, rather than forwarding the same token to both hops).
+distinct audience of its own (on top of the scope check it already does),
+which would require the Chat Agent to do a second RFC 8693 token exchange
+before delegating (true nested/rescoped delegation, rather than forwarding
+the same-audience token for every scope).
 
 ### Extending with a third tool or a third agent
 
 - **New mocked tool on the Task Agent**: add it to
-  `mcp-todos-server/server.py` as another `@mcp.tool` function, then add an
-  entry to `task-agent/app/policy.py`'s `TOOL_ACL` dict. Nothing else
-  changes — `MultiServerMCPClient.get_tools()` picks it up automatically.
+  `mcp-todos-server/server.py` as another `@mcp.tool` function, then add
+  entries to `task-agent/app/policy.py`'s `_identity_acl()` and
+  `_required_scope()` (pick whichever of `todos_read_scope`/
+  `todos_write_scope` fits, or a new scope entirely if it's a genuinely
+  different capability). Nothing else changes —
+  `MultiServerMCPClient.get_tools()` picks it up automatically.
 - **New tool/capability on the Chat Agent**: add another `@tool async def`
-  in `backend/app/agent/tools.py` (following `ask_task_agent`'s
-  `RunnableConfig`-injection pattern if it needs request-scoped
-  credentials), add it to the `_TOOLS` list in `backend/app/agent/graph.py`.
+  in `backend/app/agent/tools.py` (following the `_delegate(..., scope=...)`
+  pattern if it needs request-scoped credentials), add it to the `_TOOLS`
+  list in `backend/app/agent/graph.py`. If it needs a new scope, add it to
+  `Settings.allowed_delegation_scopes` (`backend/app/config.py`) — `/api/auth/agent-token`
+  refuses to exchange for anything not in that set.
 - **A third agent**: give it its own directory (sibling to `task-agent/`),
   its own `AgentCard`/`AgentExecutor`/graph following `task-agent/app/`'s
   shape exactly, and its own inbound-auth check calling
@@ -133,7 +164,14 @@ exist in `a2a-sdk` 1.1.2; it's `a2a.server.routes`).
   awrap_tool_call=handler)` where `handler(request: ToolCallRequest,
   execute) -> ToolMessage | Command` — `request.runtime.config["configurable"]`
   is how the handler reads values threaded in from the outer graph
-  invocation (e.g. the verified `client_id` for the policy check).
+  invocation (e.g. the verified `client_id` *and* `granted_scope` for the
+  policy check).
+- **`AIMessage.content` is `str | list[dict]`**, not always a plain
+  string — normalize with an `_extract_text()` helper (see both
+  `backend/app/routes/invoke.py` and `task-agent/app/agent_executor.py`)
+  before passing it anywhere that needs a real `str`, e.g.
+  `a2a.helpers.new_text_part(text=...)`, which raised an opaque
+  `TypeError: bad argument type for built-in operation` when handed a list.
 
 ## Honest framing if asked "why LangChain for this"
 

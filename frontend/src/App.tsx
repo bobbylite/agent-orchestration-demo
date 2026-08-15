@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AgentAuthButton } from "./components/AgentAuthButton"
 import { ChatPanel, type ChatMessage } from "./components/ChatPanel"
 import { EventConsole, type RawEvent } from "./components/EventConsole"
 import { SignInButton } from "./components/SignInButton"
@@ -37,7 +36,7 @@ export default function App() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
   }
 
-  // Shared by the initial send and the inline-authenticate retry — both are
+  // Shared by the initial send and the inline-approval retry — both are
   // "run this user text through the graph and stream into this assistant
   // message", just with different setup around them.
   async function runTurn(content: string, assistantMessageId: string) {
@@ -49,7 +48,7 @@ export default function App() {
             prev.map((m) => (m.id === assistantMessageId ? { ...m, content: m.content + text } : m)),
           )
         },
-        onAuthRequired: () => updateMessage(assistantMessageId, { needsAgentAuth: true }),
+        onAuthRequired: (scope) => updateMessage(assistantMessageId, { pendingApprovalScope: scope }),
         onDone: () => setSending(false),
         onError: (message) => {
           updateMessage(assistantMessageId, { content: `⚠ ${message}` })
@@ -71,20 +70,22 @@ export default function App() {
     await runTurn(content, assistantMessage.id)
   }
 
-  // Authenticate inline, then automatically retry the same request — the
-  // point is "ask → authenticate → try again" as one flow, not a second
-  // manual step.
-  async function handleInlineAuthenticate(assistantMessageId: string, originalContent: string) {
-    await api.authenticateAgent()
+  // Approve inline (RFC 8693 Token Exchange for exactly this one scope),
+  // then automatically retry the same request — "ask → approve → try
+  // again" as one flow, not a second manual step. Approving one scope
+  // (e.g. reading) never grants another (e.g. writing) — asking for a
+  // write action afterwards will prompt again, for "todos:write" specifically.
+  async function handleInlineApprove(assistantMessageId: string, originalContent: string, scope: string) {
+    await api.approveAgentAction(scope)
     await refreshMe()
-    updateMessage(assistantMessageId, { needsAgentAuth: false, content: "" })
+    updateMessage(assistantMessageId, { pendingApprovalScope: null, content: "" })
     await runTurn(originalContent, assistantMessageId)
   }
 
   // Plain chat only needs a signed-in session — see backend/app/routes/invoke.py.
-  // Delegating to the Task Agent (todos, etc.) needs the exchanged token too,
-  // but that's surfaced inline in the chat when it's actually needed, not
-  // gated here.
+  // Delegating to the Task Agent (todos, etc.) needs a per-action delegated
+  // token too, but that's surfaced inline in the chat when it's actually
+  // needed, scoped to exactly that action — not gated here.
   const canSend = Boolean(me?.signed_in) && !sending
   const disabledReason = !me?.oidc_enabled
     ? null
@@ -100,7 +101,6 @@ export default function App() {
           <p className="text-xs text-ink-muted">LangGraph agent · PingOne identity · OpenTelemetry</p>
         </div>
         <div className="flex items-center gap-3">
-          <AgentAuthButton me={me} onAuthenticated={refreshMe} />
           <SignInButton me={me} />
           <div className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
           <ThemeToggle />
@@ -114,7 +114,7 @@ export default function App() {
             canSend={canSend}
             disabledReason={disabledReason}
             onSend={handleSend}
-            onInlineAuthenticate={handleInlineAuthenticate}
+            onInlineApprove={handleInlineApprove}
           />
         </section>
 

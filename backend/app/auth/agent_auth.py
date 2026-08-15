@@ -44,12 +44,14 @@ async def token_exchange(
     *,
     subject_token: str,
     actor_token: str,
+    scope: str,
 ) -> dict[str, Any]:
     """Step 2: combine the user's session access token (subject) with the
-    agent's own actor token into one delegated token carrying both identities.
-
-    `scope` here requests the scope of the resulting *delegated* token —
-    distinct from the actor token's own scope requested in step 1.
+    agent's own actor token into one delegated token carrying both identities,
+    scoped to exactly the one capability being requested right now (e.g.
+    "todos:read") — not a single blanket scope covering everything the agent
+    might ever do. Called fresh, once per distinct scope, the first time an
+    action needing it comes up (see app/auth/routes.py's /agent-token).
     """
     data = {
         "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
@@ -57,9 +59,8 @@ async def token_exchange(
         "subject_token_type": ACCESS_TOKEN_TYPE,
         "actor_token": actor_token,
         "actor_token_type": ACCESS_TOKEN_TYPE,
+        "scope": scope,
     }
-    if settings.resolved_token_exchange_scope:
-        data["scope"] = settings.resolved_token_exchange_scope
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             token_endpoint,

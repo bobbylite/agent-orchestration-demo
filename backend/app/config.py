@@ -24,12 +24,6 @@ class Settings(BaseSettings):
     # Scope requested for the agent's own actor token (step 1, Client
     # Credentials) — what the agent can do *as itself*.
     agent_scopes: str | None = Field(default=None)
-    # Scope requested for the resulting delegated token (step 2, Token
-    # Exchange) — what the agent can do *on behalf of the user*, which is
-    # legitimately a different scope set than its own actor-token scope
-    # (e.g. an actor-only "agent:identify" vs a delegated "agentcore:invoke").
-    # Falls back to agent_scopes if unset.
-    agent_token_exchange_scope: str | None = Field(default=None)
 
     # Expected `aud` claim on the delegated token /api/invoke will accept —
     # this is what makes inbound auth actually mean something: a token
@@ -39,9 +33,20 @@ class Settings(BaseSettings):
     # for a token minted against a custom resource owned by the agent app.
     agent_expected_audience: str | None = Field(default=None)
 
+    # Per-action delegation scopes (step 2, Token Exchange) — requested
+    # fresh, with exactly one of these, the first time a given action is
+    # needed, not a single blanket scope up front. Must match whatever scope
+    # strings are actually defined on the PingOne resource, and must match
+    # task-agent/.env's copies of the same two values exactly (it
+    # independently checks the granted scope, not just identity).
+    todos_read_scope: str = Field(default="todos:read")
+    todos_write_scope: str = Field(default="todos:write")
+
     @property
-    def resolved_token_exchange_scope(self) -> str | None:
-        return self.agent_token_exchange_scope or self.agent_scopes
+    def allowed_delegation_scopes(self) -> set[str]:
+        """The only scopes /api/auth/agent-token will ever request token
+        exchange for — never an arbitrary client-supplied string."""
+        return {self.todos_read_scope, self.todos_write_scope}
 
     @property
     def resolved_expected_audience(self) -> str | None:

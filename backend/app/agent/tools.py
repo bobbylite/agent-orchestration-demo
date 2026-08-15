@@ -1,11 +1,15 @@
-"""ask_task_agent — delegates to the Task Agent over the real A2A protocol
-(not an in-process call). Forwards the SAME RFC 8693 delegated token this
-service already verified for its own /api/invoke inbound auth — see
-CLAUDE.md "Identity propagation across the A2A hop". The Task Agent
-independently re-verifies that token itself; nothing here is trusted on
-the Task Agent's word alone — which is exactly what the span attributes
-below are meant to make visible: this service's own view of who's calling,
-alongside the Task Agent's independently-confirmed view of the same thing.
+"""ask_task_agent_{read,write} — delegate to the Task Agent over the real A2A
+protocol (not an in-process call). Two separate tools, not one with a
+read/write parameter, so the model's own tool choice *is* the read/write
+signal — the same "let the model decide via real tool-calling" principle
+the rest of this codebase already follows, applied to scope selection too.
+
+Each forwards the delegated token for its OWN specific scope
+("todos:read" / "todos:write") — obtained via its own independent RFC 8693
+Token Exchange, not a single blanket token covering everything. See
+CLAUDE.md "Identity propagation across the A2A hop" and "Per-action scoped
+delegation". The Task Agent independently re-verifies the token AND its
+scope; nothing here is trusted on say-so.
 """
 
 from __future__ import annotations
@@ -20,11 +24,11 @@ from langchain_core.tools import tool
 from app.telemetry import with_span
 
 # Recognized by routes/invoke.py (checked against on_tool_end output) to emit
-# a deterministic `auth_required` SSE event — the frontend renders an inline
-# "Authenticate Agent" prompt off of that event, not by parsing whatever
-# prose the model wraps this content in. The model still sees the full
-# sentence and explains it to the user in its own words; the marker is just
-# for the frontend's benefit, model behavior doesn't depend on it.
+# a deterministic `auth_required` SSE event carrying which scope is needed —
+# the frontend renders an inline "Approve Agent Action" prompt off of that
+# event, not by parsing whatever prose the model wraps this content in. The
+# model still sees the full sentence and explains it to the user in its own
+# words; the marker is just for the frontend's benefit.
 NEEDS_AGENT_AUTH_MARKER = "NEEDS_AGENT_AUTH"
 
 _STATE_LABELS = {
@@ -47,12 +51,10 @@ def _task_agent_confirmation(task) -> str | None:
     return None
 
 
-@tool
-async def ask_task_agent(request: str, config: RunnableConfig) -> str:
-    """Delegate to the Task Agent for anything about the user's todo list —
-    listing items, adding a new one, or marking one complete."""
+async def _delegate(request: str, config: RunnableConfig, *, scope: str) -> str:
     configurable = config.get("configurable", {})
-    bearer_token = configurable.get("bearer_token")
+    bearer_tokens: dict[str, str] = configurable.get("bearer_tokens") or {}
+    bearer_token = bearer_tokens.get(scope)
     task_agent_url = configurable.get("task_agent_url")
     caller_sub = configurable.get("caller_sub", "")
     caller_agent_client_id = configurable.get("caller_agent_client_id", "")
@@ -63,6 +65,7 @@ async def ask_task_agent(request: str, config: RunnableConfig) -> str:
             "a2a.task_agent_url": task_agent_url or "",
             "identity.sub": caller_sub,
             "identity.agent_client_id": caller_agent_client_id,
+            "oauth.scope": scope,
         },
     ) as span:
         if not task_agent_url:
@@ -70,15 +73,15 @@ async def ask_task_agent(request: str, config: RunnableConfig) -> str:
             return "The Task Agent is not reachable right now (missing configuration)."
 
         if not bearer_token:
-            # Expected, common state — signing in alone doesn't authorize the
-            # agent to act on the user's behalf. Not an error: the user just
-            # needs to complete Client Credentials + Token Exchange first.
+            # Expected, common state — the user hasn't approved this
+            # specific action yet. Not an error: they just need to approve
+            # it (which does RFC 8693 Token Exchange for exactly this scope)
+            # and then repeat their request.
             span.set_attribute("a2a.result", "needs_agent_auth")
             return (
-                f"{NEEDS_AGENT_AUTH_MARKER}: To do anything with the user's todo list, the agent "
-                "must first authenticate itself and obtain a delegated token (RFC 8693 Token "
-                "Exchange) — being signed in alone doesn't authorize acting on the user's behalf. "
-                "Tell the user to click \"Authenticate Agent\" and then repeat their request."
+                f"{NEEDS_AGENT_AUTH_MARKER}: To do this, the agent needs the user to approve this "
+                f"specific action first — it doesn't have a delegated token scoped for {scope!r} yet. "
+                "Tell the user to click \"Approve Agent Action\" and then repeat their request."
             )
 
         headers = {"Authorization": f"Bearer {bearer_token}"}
@@ -116,3 +119,26 @@ async def ask_task_agent(request: str, config: RunnableConfig) -> str:
 
         span.set_attribute("a2a.result", "ok" if answer else "empty")
         return answer or "The Task Agent did not return a response."
+
+
+@tool
+async def ask_task_agent_read(request: str, config: RunnableConfig) -> str:
+    """Delegate a READ-ONLY request to the Task Agent — use this for viewing
+    or listing the user's todos. Never use this for adding, completing, or
+    otherwise changing anything; use ask_task_agent_write for that."""
+    # Actual scope string comes from configurable (backend/app/config.py's
+    # TODOS_READ_SCOPE), not hardcoded here, so a deployment that customizes
+    # it can't drift between what's requested from PingOne and what this
+    # tool looks up in bearer_tokens.
+    scope = config.get("configurable", {}).get("todos_read_scope", "todos:read")
+    return await _delegate(request, config, scope=scope)
+
+
+@tool
+async def ask_task_agent_write(request: str, config: RunnableConfig) -> str:
+    """Delegate a WRITE request to the Task Agent — use this for adding a
+    new todo or marking one complete, or any other change to the user's
+    todo list. This requires separate approval from read access, and the
+    user may be asked to approve it even if they already approved reading."""
+    scope = config.get("configurable", {}).get("todos_write_scope", "todos:write")
+    return await _delegate(request, config, scope=scope)

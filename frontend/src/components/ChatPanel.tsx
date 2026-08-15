@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react"
-import { InlineAgentAuthPrompt } from "./InlineAgentAuthPrompt"
+import { InlineAgentApprovalPrompt } from "./InlineAgentApprovalPrompt"
 import { Markdown } from "./Markdown"
 import { TypingIndicator } from "./TypingIndicator"
 
@@ -7,11 +7,12 @@ export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string
-  /** Set when the agent tried to act on the user's behalf without a
-   * delegated token — renders an inline "Authenticate Agent" prompt. */
-  needsAgentAuth?: boolean
+  /** Set to the required scope (e.g. "todos:write") when the agent tried to
+   * act on the user's behalf without a delegated token for it — renders an
+   * inline "Approve Agent Action" prompt for that specific scope. */
+  pendingApprovalScope?: string | null
   /** For assistant messages: the user text that produced this turn, so a
-   * successful inline authentication can automatically retry it. */
+   * successful inline approval can automatically retry it. */
   sourceUserContent?: string
 }
 
@@ -20,10 +21,10 @@ interface Props {
   canSend: boolean
   disabledReason: string | null
   onSend: (message: string) => void
-  onInlineAuthenticate: (assistantMessageId: string, originalContent: string) => Promise<void>
+  onInlineApprove: (assistantMessageId: string, originalContent: string, scope: string) => Promise<void>
 }
 
-export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineAuthenticate }: Props) {
+export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineApprove }: Props) {
   const [draft, setDraft] = useState("")
 
   function handleSubmit(event: FormEvent) {
@@ -75,10 +76,11 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                     message.content
                   )}
                 </div>
-                {message.needsAgentAuth && (
+                {message.pendingApprovalScope && (
                   <div className="w-full max-w-[75%]">
-                    <InlineAgentAuthPrompt
-                      onAuthenticate={() => onInlineAuthenticate(message.id, message.sourceUserContent ?? "")}
+                    <InlineAgentApprovalPrompt
+                      scope={message.pendingApprovalScope}
+                      onApprove={(scope) => onInlineApprove(message.id, message.sourceUserContent ?? "", scope)}
                     />
                   </div>
                 )}

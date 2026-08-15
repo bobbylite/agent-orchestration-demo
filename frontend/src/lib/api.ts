@@ -11,8 +11,10 @@ export interface MeResponse {
   sub: string | null
   email: string | null
   name: string | null
-  agent_authenticated: boolean
-  exchanged: boolean
+  /** Delegation scopes already approved this session, e.g. ["todos:read"].
+   * Approving "todos:read" does not imply "todos:write" — each is its own
+   * RFC 8693 Token Exchange, requested the first time it's actually needed. */
+  exchanged_scopes: string[]
 }
 
 export interface TelemetrySpan {
@@ -40,8 +42,15 @@ export const api = {
   getConfig: () => getJson<ConfigResponse>("/api/config"),
   getMe: () => getJson<MeResponse>("/api/auth/me"),
   getTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/api/telemetry"),
-  authenticateAgent: () =>
-    getJson<{ agent_authenticated: boolean; exchanged: boolean }>("/api/auth/agent-token", { method: "POST" }),
+  /** Approve one specific delegation scope (e.g. "todos:read") — does RFC
+   * 8693 Token Exchange for exactly that scope. Approving one scope never
+   * grants another; each is requested and approved independently. */
+  approveAgentAction: (scope: string) =>
+    getJson<{ granted_scope: string; exchanged_scopes: string[] }>("/api/auth/agent-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope }),
+    }),
   loginUrl: "/api/auth/login",
   logoutUrl: "/api/auth/logout",
 }
@@ -50,11 +59,12 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
-  /** The agent tried to act on the user's behalf (e.g. via A2A) without a
-   * delegated token. Not an error — the turn continues normally and the
-   * model explains it in its own words; this is the deterministic signal
-   * for rendering an inline "Authenticate Agent" prompt. */
-  onAuthRequired?: () => void
+  /** The agent tried to act on the user's behalf without a delegated token
+   * for this specific scope. Not an error — the turn continues normally and
+   * the model explains it in its own words; this is the deterministic
+   * signal for rendering an inline "Approve Agent Action" prompt for that
+   * scope specifically. */
+  onAuthRequired?: (scope: string) => void
   onRawEvent?: (event: string, data: string) => void
 }
 
@@ -107,7 +117,7 @@ export async function streamInvoke(
       if (eventName === "token") handlers.onToken(parsed.text)
       else if (eventName === "done") handlers.onDone()
       else if (eventName === "error") handlers.onError(parsed.message)
-      else if (eventName === "auth_required") handlers.onAuthRequired?.()
+      else if (eventName === "auth_required") handlers.onAuthRequired?.(parsed.scope)
     }
   }
 }

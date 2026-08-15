@@ -20,11 +20,12 @@ uv run uvicorn app.main:app --reload --port 8000
 - **Must run with cwd = `backend/`.** `uv run` resolves against
   `backend/pyproject.toml` — running from the repo root fails with
   `error: Failed to spawn: uvicorn / Caused by: No such file or directory`.
-- Requires `backend/.env` (copy from `backend/.env.example`) for the
-  PingOne sign-in, Authenticate Agent, and chat to actually work. Without
-  it, `/api/config` reports `oidc_enabled`/`agent_enabled` as `false` and
-  the UI shows "not configured" hints instead of the buttons — that's
-  expected degraded mode, not a bug.
+- Requires `backend/.env` (copy from `backend/.env.example`) for PingOne
+  sign-in and any agent action approval to work. Without it, `/api/config`
+  reports `oidc_enabled`/`agent_enabled` as `false` and the sign-in button
+  shows a "not configured" hint — expected degraded mode, not a bug. Plain
+  chat needs only sign-in; approval prompts only appear once you ask for
+  something that needs delegation (see "Verify the full stack" below).
 - Verify: `curl http://localhost:8000/api/health` → `{"status":"ok"}`.
 
 ## Frontend (Vite)
@@ -78,10 +79,12 @@ uv run uvicorn app.main:app --port 9010
 2. Open http://localhost:5173 — "Sign in with PingOne" should render (not
    the "not configured" hint) if `.env` is populated.
 3. `curl http://localhost:5173/api/config` → confirms the proxy is wired.
-4. With all four services up: sign in, Authenticate Agent, ask "what's on
-   my todo list?" — the answer should reflect real MCP data (seeded: "Buy
-   milk", "Renew passport"), and the Telemetry panel should show an
-   `agent.a2a_delegate` span.
+4. With all four services up: sign in, ask "what's on my todo list?" — this
+   should prompt an inline "Approve Agent Action" for `todos:read`; approve
+   it and the answer should reflect real MCP data (seeded: "Buy milk",
+   "Renew passport"), with the Telemetry panel showing an `agent.a2a_delegate`
+   span. Then ask it to complete one — this prompts *again*, for
+   `todos:write` specifically; approving read earlier doesn't cover it.
 
 ## Type-check / lint / build (frontend)
 

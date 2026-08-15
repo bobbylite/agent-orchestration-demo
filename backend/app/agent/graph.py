@@ -1,11 +1,11 @@
 """The LangGraph agent invoked by /api/invoke.
 
-Two nodes: `assistant` reasons (including deciding whether to delegate to
-the Task Agent via the `ask_task_agent` tool), `tools` executes that
-delegation over the real A2A protocol (app/agent/tools.py) — not an
-in-process call. Standard LangGraph ReAct loop shape via the prebuilt
-ToolNode/tools_condition, same as the Task Agent's own graph
-(task-agent/app/graph.py).
+Two nodes: `assistant` reasons (including deciding whether — and which of
+ask_task_agent_read/ask_task_agent_write — to delegate to the Task Agent),
+`tools` executes that delegation over the real A2A protocol
+(app/agent/tools.py) — not an in-process call. Standard LangGraph ReAct
+loop shape via the prebuilt ToolNode/tools_condition, same as the Task
+Agent's own graph (task-agent/app/graph.py).
 
 MemorySaver checkpoints conversation state per thread_id, so the frontend
 only ever needs to send the newest user message, not the full history.
@@ -25,10 +25,10 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import SecretStr
 
-from app.agent.tools import ask_task_agent
+from app.agent.tools import ask_task_agent_read, ask_task_agent_write
 from app.config import Settings
 
-_TOOLS = [ask_task_agent]
+_TOOLS = [ask_task_agent_read, ask_task_agent_write]
 
 
 class AgentState(TypedDict):

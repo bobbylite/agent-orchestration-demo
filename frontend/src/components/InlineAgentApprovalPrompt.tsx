@@ -3,10 +3,20 @@ import { useState } from "react"
 type Status = "idle" | "loading" | "error"
 
 interface Props {
-  onAuthenticate: () => Promise<void>
+  scope: string
+  onApprove: (scope: string) => Promise<void>
 }
 
-export function InlineAgentAuthPrompt({ onAuthenticate }: Props) {
+const SCOPE_LABELS: Record<string, string> = {
+  "todos:read": "view your todo list",
+  "todos:write": "add or complete items on your todo list",
+}
+
+function describeScope(scope: string): string {
+  return SCOPE_LABELS[scope] ?? `use the "${scope}" permission`
+}
+
+export function InlineAgentApprovalPrompt({ scope, onApprove }: Props) {
   const [status, setStatus] = useState<Status>("idle")
   const [error, setError] = useState<string | null>(null)
 
@@ -14,7 +24,7 @@ export function InlineAgentAuthPrompt({ onAuthenticate }: Props) {
     setStatus("loading")
     setError(null)
     try {
-      await onAuthenticate()
+      await onApprove(scope)
       // On success the parent removes this prompt (it re-runs the turn),
       // so no "success" status is needed here.
     } catch (err) {
@@ -29,7 +39,11 @@ export function InlineAgentAuthPrompt({ onAuthenticate }: Props) {
         <LockIcon />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-xs text-ink">This needs the agent to act on your behalf — it isn't authenticated yet.</p>
+        <p className="text-xs text-ink">
+          The agent needs your approval to <strong>{describeScope(scope)}</strong> — it doesn&rsquo;t have that
+          permission yet.
+        </p>
+        <p className="mt-0.5 font-mono text-[10px] text-ink-muted">{scope}</p>
         {status === "error" && error && <p className="mt-1 text-xs text-danger">{error}</p>}
       </div>
       <button
@@ -38,7 +52,7 @@ export function InlineAgentAuthPrompt({ onAuthenticate }: Props) {
         disabled={status === "loading"}
         className="shrink-0 rounded-md border border-brand/30 bg-canvas-raised px-3 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand/10 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {status === "loading" ? "Authenticating…" : "Authenticate Agent"}
+        {status === "loading" ? "Approving…" : "Approve Agent Action"}
       </button>
     </div>
   )

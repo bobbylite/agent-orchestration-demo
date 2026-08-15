@@ -50,10 +50,15 @@ async def _get_mcp_tools(settings: Settings) -> list:
 
 async def _policy_wrap_tool_call(request: ToolCallRequest, execute):
     tool_name = request.tool_call["name"]
-    client_id = (request.runtime.config or {}).get("configurable", {}).get("client_id")
-    if not policy.check(tool_name, client_id):
+    configurable = (request.runtime.config or {}).get("configurable", {})
+    client_id = configurable.get("client_id")
+    granted_scope = configurable.get("granted_scope")
+    if not policy.check(tool_name, client_id, granted_scope):
         return ToolMessage(
-            content=f"Denied: agent '{client_id}' is not authorized to use tool '{tool_name}'.",
+            content=(
+                f"Denied: agent '{client_id}' (granted scope: {granted_scope!r}) is not authorized "
+                f"to use tool '{tool_name}'."
+            ),
             tool_call_id=request.tool_call["id"],
         )
     return await execute(request)

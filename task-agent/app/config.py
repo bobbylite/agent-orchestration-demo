@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     # shows up as the verified caller's identity. Used by policy.py's ACL.
     allowed_agent_client_id: str | None = Field(default=None)
 
+    # Must match backend/.env's TODOS_READ_SCOPE / TODOS_WRITE_SCOPE exactly —
+    # policy.py checks the verified token's own `scope` claim against these,
+    # not just the caller's identity. See CLAUDE.md "Per-action scoped delegation".
+    todos_read_scope: str = Field(default="todos:read")
+    todos_write_scope: str = Field(default="todos:write")
+
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
 

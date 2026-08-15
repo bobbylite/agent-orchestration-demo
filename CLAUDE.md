@@ -43,39 +43,68 @@ choice; it's the load-bearing decision behind the whole backend structure:
   request — not something the agent framework (LangGraph, in either case)
   implements or is trusted to enforce.
 
-**Two privilege tiers, not one blanket gate (revised 2026-08-15).** Plain
-chat never touches a protected resource, so the signed-in session cookie —
+**Two privilege tiers, not one blanket gate (2026-08-15).** Plain chat
+never touches a protected resource, so the signed-in session cookie —
 already fully verified once, at OIDC login — is sufficient on its own;
-`/api/invoke` (`backend/app/routes/invoke.py`) no longer requires the
-exchanged token to answer at all. The exchanged token *is* still required,
-and still independently re-verified fresh via inbound auth, the moment the
-agent needs to act **on the user's behalf** — currently that's exactly the
-`ask_task_agent` call. If no delegated token is available at that point, the
-tool doesn't attempt the A2A call; it returns a sentinel
-(`NEEDS_AGENT_AUTH_MARKER`, `backend/app/agent/tools.py`) that
-`routes/invoke.py` detects via `on_tool_end` and turns into a dedicated
-`auth_required` SSE event — the frontend renders an inline "Authenticate
-Agent" prompt in that chat turn (`InlineAgentAuthPrompt.tsx`) and, once
-authenticated, automatically retries the same request. The model still gets
-the full sentence and explains it to the user in its own words; the SSE
-event is what the UI reacts to, not a parse of the model's prose.
+`/api/invoke` (`backend/app/routes/invoke.py`) doesn't require an exchanged
+token to answer at all. A delegated token *is* still required, and still
+independently re-verified fresh via inbound auth, the moment the agent
+needs to act **on the user's behalf**.
 
-This is *not* a weakening of the AgentCore-inbound-auth story — the actual
+**Per-action scoped delegation, not one token for everything (revised
+2026-08-15).** There is no single "authenticated" state for the agent —
+delegation is scoped per action, approved just-in-time, the first time each
+scope is actually needed:
+
+- Two tools, not one: `ask_task_agent_read` (needs `todos:read`) and
+  `ask_task_agent_write` (needs `todos:write`) — `backend/app/agent/tools.py`.
+  The model's own tool choice *is* the read/write signal; there's no
+  keyword classifier deciding this.
+- Each scope gets its own independent RFC 8693 Token Exchange call
+  (`POST /api/auth/agent-token` with `{"scope": "todos:read"}` or
+  `"todos:write"`) — approving one never grants the other. The exchanged
+  token cookie is a dict keyed by scope (`{"todos:read": {...}, "todos:write":
+  {...}}`), not a single token.
+- When a tool needs a scope that isn't in that dict yet, it returns a
+  sentinel (`NEEDS_AGENT_AUTH_MARKER`) that `routes/invoke.py` maps back to
+  the *specific* scope (via which tool fired) and turns into an
+  `auth_required` SSE event carrying `{"scope": "..."}`. The frontend
+  renders `InlineAgentApprovalPrompt.tsx`, scoped to that one action,
+  labeled "Approve Agent Action" — not a generic "Authenticate Agent"
+  button (that button and its header placement are gone entirely; approval
+  is purely contextual now, there's no coherent generic action left to
+  attach a standalone button to).
+- Approving stacks, it doesn't replace: after approving read then write,
+  both scopes are present and both kinds of request succeed without
+  re-approving.
+
+**The scoping is enforced, not just labeled in the UI** — this is the part
+that would be easy to skip and shouldn't be. `task-agent/app/policy.py`'s
+`check()` takes the verified token's own `scope` claim (not just identity)
+and requires the specific scope each tool needs (`list_todos`→read,
+`add_todo`/`complete_todo`→write) via `TaskAgentExecutor` → the `ToolNode`
+`awrap_tool_call` hook. I verified this holds even adversarially: a
+validly-signed, correctly-audienced token scoped *only* `todos:read`,
+presented directly to the Task Agent (bypassing the Chat Agent's own tool
+availability entirely) asking it to add a todo, was independently rejected
+— confirmed no mutation occurred. `shared/inbound_auth.VerifiedIdentity`
+carries the raw `scope` claim (`.has_scope(required)` helper) for exactly
+this.
+
+None of this weakens the AgentCore-inbound-auth story — the actual
 enforcement boundary (the Task Agent, where a protected resource is
-touched) is completely untouched: it still hard-rejects any call without a
-correctly-scoped, freshly-verified delegated token, independent of
-whatever the Chat Agent believes. What moved is where the *outer* gate
-sits, to match a real AgentCore deployment more precisely: session auth
-gets you to the agent, delegated/exchanged auth is what lets the agent act
-for you.
+touched) is untouched in spirit, just sharper: it hard-rejects any call
+without a correctly-scoped, freshly-verified delegated token, independent
+of whatever the Chat Agent believes, now down to the individual capability
+rather than an all-or-nothing "authenticated."
 
 **Rule for any future work**: if you're adding an authorization/policy
 check, it is a plain function/FastAPI dependency, not a graph node — even if
 it gets a persona-like name ("policy agent") in telemetry or UI copy for
-storytelling purposes. `task-agent/app/policy.py`'s `TOOL_ACL` dict lookup,
-called from `TaskAgentExecutor.execute()` (via `ToolNode`'s
-`awrap_tool_call` hook) before the MCP server is ever touched, is the
-worked example — copy that shape, don't reinvent it.
+storytelling purposes. `task-agent/app/policy.py`'s `check()` (identity ACL
+*and* scope claim, both required), called from `TaskAgentExecutor.execute()`
+(via `ToolNode`'s `awrap_tool_call` hook) before the MCP server is ever
+touched, is the worked example — copy that shape, don't reinvent it.
 
 Inbound-auth verification itself is shared, not reimplemented per service:
 `shared/src/agentcore_shared/inbound_auth.py`'s `verify_bearer_token()` is
@@ -121,15 +150,16 @@ emits a tool call, a tools node executes it, loop back to the assistant to
 turn the result into a natural-language answer, then `END`.
 
 **Chat Agent graph** (`backend/app/agent/graph.py`) — 2 nodes:
-- `assistant` — Claude, with `ask_task_agent` (`backend/app/agent/tools.py`)
-  bound via `bind_tools()`. Decides itself, via real tool-calling, whether
-  to delegate — nothing routes on keywords.
-- `tools` — a `ToolNode` wrapping `ask_task_agent`, which is *not* an LLM
-  call: it's a real A2A client call (`a2a.client.create_client`) to the Task
-  Agent, over HTTP/JSON-RPC, not an in-process function call. It forwards
-  the *same* delegated token this request already verified for its own
-  inbound auth (see "Identity propagation" below) — threaded through via
-  `config["configurable"]["bearer_token"]`, set in
+- `assistant` — Claude, with `ask_task_agent_read` and `ask_task_agent_write`
+  (`backend/app/agent/tools.py`) bound via `bind_tools()`. Decides itself,
+  via real tool-calling, whether to delegate *and which scope it needs* —
+  nothing routes on keywords, and there's no single generic delegation tool.
+- `tools` — a `ToolNode` wrapping both, which are *not* LLM calls: each is a
+  real A2A client call (`a2a.client.create_client`) to the Task Agent, over
+  HTTP/JSON-RPC, not an in-process function call. Each forwards the
+  delegated token for its *own* scope specifically (see "Per-action scoped
+  delegation" below) — threaded through via
+  `config["configurable"]["bearer_tokens"]` (a dict keyed by scope), set in
   `backend/app/routes/invoke.py`.
 
 **Task/Specialist Agent graph** (`task-agent/app/graph.py`, separate
@@ -137,17 +167,18 @@ process, own A2A server via `a2a-sdk`) — 2 nodes:
 - `task_assistant` — its own Claude call, reasons about which MCP tool to
   invoke (`list_todos`/`add_todo`/`complete_todo`, fetched from
   `mcp-todos-server/` via `langchain_mcp_adapters.MultiServerMCPClient` and
-  bound the same way as the Chat Agent's tool).
+  bound the same way as the Chat Agent's tools).
 - `execute_tool` — a `ToolNode` over those MCP-backed tools, with the
-  policy ACL wired in via `awrap_tool_call` (see the core rule above) —
-  denied calls return a `ToolMessage` explaining the denial, so the model
-  can tell the user, rather than silently failing.
+  identity-*and*-scope policy check wired in via `awrap_tool_call` (see the
+  core rule above) — denied calls return a `ToolMessage` explaining the
+  denial, so the model can tell the user, rather than silently failing.
 
 `TaskAgentExecutor.execute()` (`task-agent/app/agent_executor.py`) runs
 inbound auth *before* invoking this graph at all — pulls the bearer token
 out of `context.call_context.state["headers"]`, verifies it, and only then
-calls `graph.ainvoke(...)`, passing the verified `client_id` through
-`config["configurable"]["client_id"]` for the policy check to use.
+calls `graph.ainvoke(...)`, passing the verified `client_id` *and*
+`identity.scope` through `config["configurable"]["client_id"]` /
+`["granted_scope"]` for the policy check to use.
 
 ### Identity propagation across the A2A hop
 
@@ -164,16 +195,35 @@ requiring the Chat Agent to do a second token exchange before delegating.
 
 ### Verified end-to-end (2026-08-15)
 
-Real signed JWTs (RS256, self-issued during testing against a throwaway
-mock OIDC/JWKS endpoint — not mocked function calls) confirmed: no
-token → task fails before the graph runs; forged signature → rejected;
-valid token from a client_id *not* in the ACL → tool call denied, model
-explains it to the user; valid token + allowed tool → real MCP data flows
-back through the A2A artifact into the Chat Agent's final answer. Also
-observed for free: `a2a-sdk` has its own OTel instrumentation
-(`a2a.client.transports.jsonrpc.*` spans) that flows into the same
-`RecordingSpanProcessor` ring buffer automatically, alongside
-`agent.a2a_delegate`.
+Real signed JWTs throughout (RS256, self-issued during testing against a
+throwaway mock OIDC/JWKS *and token* endpoint — full RFC 8693 exchange
+calls actually executed, not mocked function calls). Two full passes:
+
+- **Identity**: no token → task fails before the graph runs; forged
+  signature → rejected; valid token from a client_id *not* in the ACL →
+  tool call denied, model explains it to the user; valid token + allowed
+  tool → real MCP data flows back through the A2A artifact into the Chat
+  Agent's final answer. `a2a-sdk` also has its own OTel instrumentation
+  (`a2a.client.transports.jsonrpc.*` spans) that flows into the same
+  `RecordingSpanProcessor` ring buffer automatically, alongside
+  `agent.a2a_delegate`, for free.
+- **Scope** (the full read-then-write-needs-separate-approval flow): asking
+  to read todos before any approval → `auth_required` for `todos:read`,
+  graceful in-chat explanation, `exchanged_scopes: []`; approving read →
+  real token exchange, retry succeeds with real MCP data; asking to
+  complete a todo *with only read approved* → `auth_required` for
+  `todos:write` specifically, **not** silently allowed by the existing read
+  approval; approving write → both scopes now present; retry → real MCP
+  mutation confirmed by reading the todo list back afterward
+  (`done: true`). Adversarial check: a validly-signed, correctly-audienced
+  token scoped *only* `todos:read`, sent directly to the Task Agent
+  (bypassing the Chat Agent's own tool availability) asking it to add a
+  todo, was independently rejected — confirmed no mutation occurred either.
+  This test run also caught and fixed a real bug: `TaskAgentExecutor`
+  assumed `AIMessage.content` was always a plain string when building the
+  A2A artifact; it can be a list of content blocks depending on the
+  response shape, which crashed `add_artifact`. Fixed with the same
+  `_extract_text` normalization `routes/invoke.py` already used.
 
 ### Not yet built
 
@@ -191,19 +241,22 @@ observed for free: `a2a-sdk` has its own OTel instrumentation
 
 - Sign in with PingOne (OIDC Authorization Code + PKCE S256, JWE-encrypted
   session cookie) — sufficient on its own for plain chat.
-- Authenticate Agent (Client Credentials + RFC 8693 Token Exchange) —
-  required only for the agent to act on the user's behalf (A2A delegation),
-  enforced fresh via inbound auth at that point, not at the chat gate. See
-  "Two privilege tiers" above.
-- Inline in-chat authentication: asking for something that needs delegation
-  without having authenticated yet gets a graceful explanation plus an
-  `InlineAgentAuthPrompt` in that turn, which auto-retries on success.
+- Per-action scoped delegation (Client Credentials + RFC 8693 Token
+  Exchange, requested fresh per scope) — required only for the agent to act
+  on the user's behalf (A2A delegation), enforced fresh via inbound auth at
+  that point, not at the chat gate. See "Per-action scoped delegation" above.
+- Inline in-chat approval: asking for something that needs a scope not yet
+  granted gets a graceful explanation plus an `InlineAgentApprovalPrompt`
+  scoped to that one action ("Approve Agent Action"), which auto-retries on
+  success. There's no header-level "Authenticate Agent" button anymore —
+  approval is purely contextual.
 - OpenTelemetry spans + redaction + ring buffer, live in the Telemetry panel.
 - LangGraph chat agent (Claude), streamed over SSE, Markdown-rendered,
-  per-thread checkpointed — now 2 nodes, with real A2A delegation to a
-  separate Task Agent service for todos (see "LangGraph + real A2A" below).
+  per-thread checkpointed — 2 nodes, with real, scope-gated A2A delegation
+  to a separate Task Agent service for todos (see "LangGraph + real A2A"
+  and "Per-action scoped delegation" above).
 - Standalone `mcp-todos-server/` (in-memory, no auth — trusted-network-only
-  demo service) and `task-agent/` (own A2A server, own policy ACL gate).
+  demo service) and `task-agent/` (own A2A server, own scope-aware policy gate).
 - UI styled to match Ping Identity's actual production site (pulled real
   hex values and Montserrat from their live CSS, not guessed): dark navy ink
   `#051727` on near-white `#fbfbfc`, red/orange brand gradient
@@ -268,6 +321,17 @@ observed for free: `a2a-sdk` has its own OTel instrumentation
   `client.send_message(...)`) — check `chunk.HasField("task")`, then
   `chunk.task.artifacts[-1].parts[-1].text` for the final answer, not a
   plain Python object with dict-like access.
+- **`AIMessage.content` is `str | list[dict]`, not always a plain string** —
+  a multi-block response shape crashed `a2a.helpers.new_text_part(text=...)`
+  (which needs a real `str`) inside `task-agent/app/agent_executor.py` once
+  a completion response happened to come back as blocks. Both
+  `backend/app/routes/invoke.py` and `task-agent/app/agent_executor.py` now
+  have their own `_extract_text()` normalizing this — reuse that shape
+  anywhere else `AIMessage.content` gets read directly.
+- **`backend/.env` and `task-agent/.env`'s `TODOS_READ_SCOPE` /
+  `TODOS_WRITE_SCOPE` must also match exactly**, same reasoning as
+  `AGENT_EXPECTED_AUDIENCE` above — `task-agent/app/policy.py` checks the
+  verified token's `scope` claim against its own copies of these two values.
 
 ## Skills
 

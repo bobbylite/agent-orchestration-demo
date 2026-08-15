@@ -23,6 +23,7 @@ from app.auth.session import (
     set_sealed_cookie,
 )
 from app.config import Settings, get_settings
+from app.models import AgentTokenRequest
 from app.telemetry import with_span
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -145,14 +146,26 @@ async def logout(request: Request, settings: Settings = Depends(get_settings)) -
         return response
 
 
+_EXCHANGED_COOKIE_MAX_AGE = 8 * 60 * 60  # matches SESSION_COOKIE; individual
+# tokens are re-verified against their own `exp` claim on every use anyway
+# (see agentcore_shared.verify_bearer_token), so this is just a ceiling.
+
+
 @router.post("/agent-token")
 async def agent_token(
     request: Request,
     response: Response,
+    body: AgentTokenRequest,
     settings: Settings = Depends(get_settings),
 ) -> dict:
     if not settings.agent_configured:
         raise HTTPException(status_code=400, detail="Agent credentials are not configured")
+
+    if body.scope not in settings.allowed_delegation_scopes:
+        # Never request token exchange for an arbitrary client-supplied
+        # scope string — only the specific, known delegation scopes this
+        # deployment actually understands.
+        raise HTTPException(status_code=400, detail=f"Unknown delegation scope: {body.scope!r}")
 
     session = read_cookie(request, SESSION_COOKIE, settings)
     if not session or not session.get("access_token"):
@@ -160,7 +173,7 @@ async def agent_token(
 
     with with_span(
         "agent.authenticate",
-        {"identity.sub": session.get("sub", "")},
+        {"identity.sub": session.get("sub", ""), "oauth.requested_scope": body.scope},
     ):
         metadata = await oidc.get_metadata(settings)
 
@@ -187,32 +200,39 @@ async def agent_token(
                 settings,
                 subject_token=session["access_token"],
                 actor_token=actor_tokens["access_token"],
+                scope=body.scope,
             )
             te_span.set_attribute("identity.sub", session.get("sub", ""))
             te_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
-            te_span.set_attribute("oauth.scope", settings.resolved_token_exchange_scope or "")
+            te_span.set_attribute("oauth.scope", body.scope)
 
+        # One cookie, keyed by scope — each entry from its own independent
+        # exchange call, requested the first time an action needing it comes
+        # up, not all up front. Existing scopes (from earlier approvals)
+        # are preserved, not overwritten.
+        exchanged_by_scope = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings) or {}
+        exchanged_by_scope[body.scope] = {
+            "sub": session.get("sub"),
+            "client_id": settings.agent_client_id,
+            "access_token": exchanged["access_token"],
+            "scope": body.scope,
+            "issued_at": time.time(),
+        }
         set_sealed_cookie(
             response,
             EXCHANGED_TOKEN_COOKIE,
-            {
-                "sub": session.get("sub"),
-                "client_id": settings.agent_client_id,
-                "access_token": exchanged["access_token"],
-                "issued_at": time.time(),
-            },
+            exchanged_by_scope,
             settings,
-            max_age=exchanged.get("expires_in", 3600),
+            max_age=_EXCHANGED_COOKIE_MAX_AGE,
         )
 
-    return {"agent_authenticated": True, "exchanged": True}
+    return {"granted_scope": body.scope, "exchanged_scopes": list(exchanged_by_scope.keys())}
 
 
 @router.get("/me")
 async def me(request: Request, settings: Settings = Depends(get_settings)) -> dict:
     session = read_cookie(request, SESSION_COOKIE, settings)
-    agent = read_cookie(request, AGENT_TOKEN_COOKIE, settings)
-    exchanged = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
+    exchanged_by_scope = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings) or {}
     return {
         "oidc_enabled": settings.oidc_configured,
         "agent_enabled": settings.agent_configured,
@@ -220,6 +240,5 @@ async def me(request: Request, settings: Settings = Depends(get_settings)) -> di
         "sub": (session or {}).get("sub"),
         "email": (session or {}).get("email"),
         "name": (session or {}).get("name"),
-        "agent_authenticated": bool(agent),
-        "exchanged": bool(exchanged),
+        "exchanged_scopes": list(exchanged_by_scope.keys()),
     }

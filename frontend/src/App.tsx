@@ -75,28 +75,29 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4">
+      <header className="z-10 flex shrink-0 items-center justify-between border-b border-border bg-canvas-raised px-7 py-4 shadow-card">
         <div>
-          <h1 className="text-base font-semibold">AgentCore Console</h1>
+          <h1 className="text-[15px] font-semibold tracking-tight">AgentCore Console</h1>
           <p className="text-xs text-ink-muted">LangGraph agent · PingOne identity · OpenTelemetry</p>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <AgentAuthButton me={me} onAuthenticated={refreshMe} />
           <SignInButton me={me} />
+          <div className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
           <ThemeToggle />
         </div>
       </header>
 
       <main className="flex min-h-0 flex-1">
-        <section className="min-h-0 flex-1 border-r border-border">
+        <section className="min-h-0 flex-1">
           <ChatPanel messages={messages} canSend={canSend} disabledReason={disabledReason} onSend={handleSend} />
         </section>
 
-        <aside className="flex min-h-0 w-96 shrink-0 flex-col divide-y divide-border">
+        <aside className="flex min-h-0 w-[30rem] shrink-0 flex-col border-l border-border bg-canvas-raised">
           <div className="min-h-0 flex-[3]">
             <TelemetryPanel />
           </div>
-          <div className="min-h-0 flex-1">
+          <div className="min-h-0 flex-1 border-t border-border">
             <EventConsole events={rawEvents} />
           </div>
         </aside>

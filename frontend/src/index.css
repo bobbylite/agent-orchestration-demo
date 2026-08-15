@@ -14,6 +14,9 @@
   --danger-bg: #fdeaea;
   --warning: #ffc107;
   --code-bg: #eef0f4;
+  --shadow-card: 0 1px 2px rgba(5, 23, 39, 0.04), 0 1px 1px rgba(5, 23, 39, 0.03);
+  --shadow-raised: 0 4px 12px rgba(5, 23, 39, 0.08), 0 1px 2px rgba(5, 23, 39, 0.04);
+  --shadow-floating: 0 12px 32px rgba(5, 23, 39, 0.12), 0 2px 6px rgba(5, 23, 39, 0.06);
 }
 
 /* Guarded with :not([data-theme="light"]) so an explicit light-mode toggle
@@ -35,6 +38,9 @@
     --danger-bg: #2a1616;
     --warning: #e0ac2e;
     --code-bg: #16232f;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 1px rgba(0, 0, 0, 0.16);
+    --shadow-raised: 0 4px 14px rgba(0, 0, 0, 0.36), 0 1px 3px rgba(0, 0, 0, 0.24);
+    --shadow-floating: 0 16px 40px rgba(0, 0, 0, 0.48), 0 3px 8px rgba(0, 0, 0, 0.3);
   }
 }
 
@@ -52,6 +58,9 @@
   --danger-bg: #2a1616;
   --warning: #e0ac2e;
   --code-bg: #16232f;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24), 0 1px 1px rgba(0, 0, 0, 0.16);
+  --shadow-raised: 0 4px 14px rgba(0, 0, 0, 0.36), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-floating: 0 16px 40px rgba(0, 0, 0, 0.48), 0 3px 8px rgba(0, 0, 0, 0.3);
 }
 
 @theme inline {
@@ -67,6 +76,9 @@
   --color-danger-bg: var(--danger-bg);
   --color-warning: var(--warning);
   --color-code-bg: var(--code-bg);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-floating: var(--shadow-floating);
   --font-sans: "Montserrat", system-ui, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
@@ -87,6 +99,14 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/* One consistent, branded focus ring everywhere, rather than each
+   interactive element defining (or forgetting to define) its own. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 @keyframes pop-in {

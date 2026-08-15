@@ -1,0 +1,61 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MCP Todos Server",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/mcp-todos-server/.venv/bin/python",
+      "program": "${workspaceFolder}/mcp-todos-server/server.py",
+      "cwd": "${workspaceFolder}/mcp-todos-server",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Task Agent",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/task-agent/.venv/bin/python",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "9010"],
+      "cwd": "${workspaceFolder}/task-agent",
+      "envFile": "${workspaceFolder}/task-agent/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      // Its own graph fetches MCP tools at startup — needs the MCP server
+      // already accepting connections, not just "also launching".
+      "preLaunchTask": "wait-for-mcp-todos"
+    },
+    {
+      "name": "Chat Agent (backend)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/backend/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Frontend (Vite)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev",
+      "cwd": "${workspaceFolder}/frontend"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "🚀 Launch Everything",
+      "configurations": ["MCP Todos Server", "Task Agent", "Chat Agent (backend)", "Frontend (Vite)"],
+      "stopAll": true
+    },
+    {
+      "name": "💬 Chat Only (no A2A)",
+      "configurations": ["Chat Agent (backend)", "Frontend (Vite)"],
+      "stopAll": true
+    }
+  ]
+}

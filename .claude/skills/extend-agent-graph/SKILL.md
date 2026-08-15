@@ -1,115 +1,146 @@
 ---
 name: extend-agent-graph
-description: Conventions and the agreed (but shelved) plan for adding nodes, tools, or a second agent to the LangGraph graph under backend/app/agent/. Read this before adding any node, tool-calling loop, or A2A integration — don't re-derive the design from scratch.
+description: Conventions for the LangGraph graphs in backend/app/agent/ and task-agent/app/, and the real A2A wiring between them. Read this before adding any node, tool, or a third agent — the pattern to copy is already built, don't re-derive it.
 ---
 
-# Extending the agent graph
+# Extending the agent graph(s)
 
 ## The one rule that overrides everything else here
 
 **Security and authorization logic never lives inside a LangGraph node.**
 It is always a deterministic gate that runs before the graph is touched —
-a FastAPI dependency or a plain function called at the top of a route
-handler, never something reachable via the graph's own control flow.
+a FastAPI dependency, an `AgentExecutor.execute()` check before the graph
+is invoked, or a `ToolNode` `awrap_tool_call` hook — never something
+reachable via the graph's own control flow or an LLM's judgment.
 
 Why this is non-negotiable: a graph node's execution is something the
 model's own output can influence (which node runs next, whether a tool
 gets called, with what arguments). Anything that decides *whether the
 caller is allowed to be here at all* must not be inside that blast radius.
 
-The existing example to copy: `backend/app/auth/inbound.py`
-(`verify_inbound_token`) runs in `backend/app/routes/invoke.py` *before*
-`graph.astream_events(...)` is ever called — not as a node.
+Two worked examples already in this repo, copy their shape for anything new:
+- **Request-level inbound auth**: `backend/app/routes/invoke.py` calls
+  `verify_inbound_token()` *before* `graph.astream_events(...)`.
+  `task-agent/app/agent_executor.py`'s `TaskAgentExecutor.execute()` does
+  the same thing before `graph.ainvoke(...)` — pulls the bearer token from
+  `context.call_context.state["headers"]`, verifies via
+  `agentcore_shared.verify_bearer_token`, fails the A2A task
+  (`task_updater.failed(...)`) before the graph runs if it doesn't check out.
+- **Tool-level policy ACL**: `task-agent/app/policy.py`'s `check()` is a
+  plain dict lookup, wired into `task-agent/app/graph.py`'s `ToolNode` via
+  the `awrap_tool_call` hook — checked per tool call, before the MCP server
+  is ever touched. A denied call returns a `ToolMessage` explaining why, so
+  the model can tell the user, rather than silently failing or crashing.
 
-If a future "policy agent" or ACL check is added, it follows the exact same
-shape: a plain function, even if it's given an agent-like name in telemetry
-or UI copy for demo/storytelling purposes. Do not give it its own LLM call
-unless there's a genuine need for model judgment (unlikely for ACL lookups).
+If you add a third check (rate limiting, a broader ACL, whatever), it
+follows one of these two shapes: request-level (before the graph starts) or
+per-tool-call (via `awrap_tool_call`). Don't invent a third pattern, and
+don't give either check its own LLM call unless there's a genuine need for
+model judgment (there wasn't for either of the two built here).
 
-## Current state
+## Current state — two graphs, two processes, real A2A between them
 
-`backend/app/agent/graph.py`: one node, `assistant` (calls
-`ChatAnthropic`), `MemorySaver`-checkpointed per `thread_id`.
-`backend/app/routes/invoke.py` calls `graph.astream_events(..., version="v2")`
-and re-emits `on_chat_model_stream` deltas as SSE.
+Same two-node ReAct loop shape in both (prebuilt `ToolNode` +
+`tools_condition`, not hand-rolled):
 
-Honest framing if asked "why LangChain for this": at one node, it provides
-almost nothing a raw Anthropic SDK call + a dict of message history
-wouldn't. It's here because of an explicit ask to build toward multi-step
-orchestration and multi-agent (A2A) work — see below. Don't over-justify it
-if there's still only one node; say so plainly and point at the plan below
-as the reason it's staying.
+**Chat Agent** (`backend/app/agent/graph.py`) — `assistant` (Claude, tools
+bound via `bind_tools()`) ↔ `tools` (`ToolNode([ask_task_agent])`). The
+`assistant` → `tools` → `assistant` → `END` loop is standard
+`langgraph.prebuilt` usage; nothing bespoke.
 
-## Shelved plan: multi-agent + A2A demonstration
+**Task Agent** (`task-agent/app/graph.py`, separate process, own A2A
+server) — `task_assistant` (Claude, tools bound from
+`langchain_mcp_adapters.MultiServerMCPClient({...}).get_tools()`) ↔
+`execute_tool` (`ToolNode(tools, awrap_tool_call=_policy_wrap_tool_call)`).
 
-Agreed in conversation on 2026-08-15. **Do not start building this without
-confirming with the user first** — it was explicitly shelved, not
-abandoned, and the user may want to revisit the shape before implementation
-starts.
+**The actual cross-process hop**: `backend/app/agent/tools.py`'s
+`ask_task_agent` — an `@tool async def` (not a graph node itself; it's what
+`ToolNode` executes) that reads `bearer_token`/`task_agent_url` off
+`RunnableConfig["configurable"]` (injected by giving the tool function a
+`config: RunnableConfig` parameter — LangChain auto-injects it and hides it
+from the tool's schema) and makes a *real* A2A client call via
+`a2a.client.create_client(...)`. Not an in-process function call to
+anything in `task-agent/`.
 
-### Why not just a deterministic router + ACL check in one graph?
+### Identity propagation (why this is a stronger demo than it looks)
 
-That was the user's original idea, and the reason it's insufficient for
-*demonstrating A2A specifically*: A2A's defining characteristics are (a)
-each agent has its own independent, model-backed reasoning — not just
-control flow — and (b) agents communicate as separate services over the
-actual A2A protocol (Agent Cards for capability discovery, task-based
-JSON-RPC/HTTP, streamed artifacts), not via function calls inside one
-process. A single graph with an if/else router and a lookup table doesn't
-exercise either of those, even though it superficially looks like "multiple
-agents."
+The Chat Agent forwards the *same* delegated (RFC 8693 exchanged) token it
+already verified for its own `/api/invoke` inbound auth — threaded through
+via `config["configurable"]["bearer_token"]`, set in
+`backend/app/routes/invoke.py`. No new/nested token is minted. The Task
+Agent independently re-verifies that same token (same
+`agentcore_shared.verify_bearer_token`, same issuer/audience) before it
+will act — it extends zero implicit trust to the Chat Agent's own prior
+verification. `backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL`
+and `AGENT_EXPECTED_AUDIENCE` must match exactly for this to work; a
+mismatch fails with a genuinely correct `audience_mismatch`/
+`issuer_mismatch`, not a bug.
 
-### Agreed shape
+A real next step, not yet built: the Task Agent expecting a *narrower*,
+distinct audience of its own, which would require the Chat Agent to do a
+second RFC 8693 token exchange before delegating (true nested/rescoped
+delegation, rather than forwarding the same token to both hops).
 
-**Chat Agent graph** (this backend — what `/api/invoke` calls today) —
-2 nodes:
-- `assistant` — the existing model call, now with a tool bound (e.g.
-  `ask_task_agent`). It decides itself, via real tool-calling, whether to
-  delegate — not a keyword/intent classifier.
-- `a2a_delegate` — **not an LLM call.** An async node that acts purely as
-  an A2A *client*: builds a Task from the tool call's arguments, sends it
-  to the Task Agent's A2A server (use the official `a2a-sdk` Python
-  package for protocol compliance, don't hand-roll JSON-RPC), awaits the
-  artifact/result.
-- Edges: `assistant` →(tool call present?)→ `a2a_delegate` → back to
-  `assistant` (so the model turns the artifact into a natural-language
-  answer — the "pretty answer" from the original ask) → `END`. This is the
-  same loop shape as LangGraph's prebuilt ReAct agent; the only difference
-  is the "tool" is a cross-process A2A call instead of a local function.
+### Extending with a third tool or a third agent
 
-**Task/Specialist Agent graph** (NEW — a separate running service/process,
-exposing its own A2A server; does not live in `backend/app/agent/`) —
-2 nodes:
-- `task_assistant` — its own model call. Reasons about *how* to fulfill
-  the delegated task — which mocked tool to invoke, in what order. This
-  independent reasoning is what makes it a real second "agent" rather than
-  a stand-in for a lookup table.
-- `execute_tool` — calls the mocked tool (first candidate: `list_todos`),
-  loops back to `task_assistant` to package the result as an A2A artifact.
+- **New mocked tool on the Task Agent**: add it to
+  `mcp-todos-server/server.py` as another `@mcp.tool` function, then add an
+  entry to `task-agent/app/policy.py`'s `TOOL_ACL` dict. Nothing else
+  changes — `MultiServerMCPClient.get_tools()` picks it up automatically.
+- **New tool/capability on the Chat Agent**: add another `@tool async def`
+  in `backend/app/agent/tools.py` (following `ask_task_agent`'s
+  `RunnableConfig`-injection pattern if it needs request-scoped
+  credentials), add it to the `_TOOLS` list in `backend/app/agent/graph.py`.
+- **A third agent**: give it its own directory (sibling to `task-agent/`),
+  its own `AgentCard`/`AgentExecutor`/graph following `task-agent/app/`'s
+  shape exactly, and its own inbound-auth check calling
+  `agentcore_shared.verify_bearer_token` — don't reimplement verification.
+  Whether it shares the Chat Agent's audience or gets a distinct one
+  (requiring a fresh token exchange) is the same open question as above.
 
-**Policy/ACL check** — still not a graph node in either graph. It's a
-FastAPI-level gate in front of the Task Agent's A2A endpoint, structurally
-identical to `inbound_auth.verify`: checks the calling agent's identity
-(RFC 8693 `act` claim — already decoded into `InboundIdentity.actor_sub` in
-`backend/app/auth/inbound.py`, no new plumbing needed there) plus the
-delegated user's identity (`InboundIdentity.sub`) against an ACL for the
-requested tool, before the Task Agent's own graph is touched at all.
+## Verified library APIs (don't re-derive from docs, they were wrong once)
 
-**Total: 4 LangGraph nodes across 2 separate graphs/processes.**
+Confirmed by installing into a throwaway venv and introspecting real
+signatures — the web-summarized SDK docs for `a2a-sdk` were stale/wrong
+about some class locations (e.g. described `a2a.server.apps`, which doesn't
+exist in `a2a-sdk` 1.1.2; it's `a2a.server.routes`).
 
-### Tools
+- **A2A server**: `a2a.types.{AgentCard, AgentSkill, AgentCapabilities,
+  AgentInterface}` for the card; `a2a.server.agent_execution.AgentExecutor`
+  subclass with `execute(context, event_queue)`/`cancel(...)`;
+  `a2a.server.tasks.TaskUpdater` (`.start_work()`, `.failed()`,
+  `.complete()`, `.add_artifact()`) for task lifecycle; wire into FastAPI
+  via `a2a.server.routes.add_a2a_routes_to_fastapi(app,
+  agent_card_routes=create_agent_card_routes(card),
+  jsonrpc_routes=create_jsonrpc_routes(handler, "/"))`, built inside the
+  app's `lifespan` (not at import time — building the graph needs `await`).
+- **A2A client**: `a2a.client.A2ACardResolver(httpx_client=...,
+  base_url=...).get_agent_card()`, then
+  `a2a.client.create_client(agent=card, client_config=ClientConfig(streaming=False,
+  httpx_client=...))`, `client.send_message(SendMessageRequest(message=new_text_message(...)))`.
+  Responses are **protobuf** (`a2a_pb2.StreamResponse`) — check
+  `chunk.HasField("task")`, extract via
+  `chunk.task.artifacts[-1].parts[-1].text`, not dict-style access.
+  Attaching a bearer token: pass a `headers={"Authorization": f"Bearer
+  {token}"}` httpx.AsyncClient into both the resolver and `ClientConfig`.
+- **MCP server**: `fastmcp.FastMCP("name")`, `@mcp.tool` decorator,
+  `mcp.run(transport="http", host=..., port=..., path="/mcp")`.
+- **LangGraph ↔ MCP**: `langchain_mcp_adapters.client.MultiServerMCPClient({"name":
+  {"transport": "streamable_http", "url": "..."}}).get_tools()` returns
+  ready-to-bind LangChain `BaseTool` objects — this is genuinely all that's
+  needed, no manual MCP protocol handling.
+- **Per-tool-call middleware**: `langgraph.prebuilt.ToolNode(tools,
+  awrap_tool_call=handler)` where `handler(request: ToolCallRequest,
+  execute) -> ToolMessage | Command` — `request.runtime.config["configurable"]`
+  is how the handler reads values threaded in from the outer graph
+  invocation (e.g. the verified `client_id` for the policy check).
 
-Not yet built. Planned: a hardcoded config (format TBD — plain Python dict
-or a small YAML/JSON file) listing mocked tools available to the Task
-Agent, `list_todos` as the first entry, with the ACL keyed by
-`(user_sub, agent_client_id, tool_name)`.
+## Honest framing if asked "why LangChain for this"
 
-### What "is LangChain orchestrating A2A" actually means here
-
-Precisely: LangGraph orchestrates each agent's own internal reasoning loop
-(the `assistant`/`task_assistant` ↔ tool-node cycles). It does not
-implement the A2A protocol itself — that's the `a2a-sdk`'s job, invoked
-from inside the `a2a_delegate` node. The relationship is the same as
-LangChain + MCP: `langchain-mcp-adapters` exposes MCP tools *as* LangChain
-tools; A2A becomes another tool source the same way, not something
-LangChain has native protocol support for.
+At the two-node stage (as of 2026-08-15), LangGraph is earning its keep for
+real now, not just "on credit" — the `ToolNode`/`tools_condition`
+prebuilt loop, `awrap_tool_call` for the policy gate, and
+`RunnableConfig`-based credential threading are all things that would've
+been meaningfully more code to hand-roll. That wasn't true back when there
+was only one node calling Claude directly; don't retroactively claim it
+was.

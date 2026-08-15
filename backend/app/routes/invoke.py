@@ -70,7 +70,21 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                 output_chars = 0
                 async for event in graph.astream_events(
                     {"messages": [("human", body.message)]},
-                    config={"configurable": {"thread_id": body.thread_id}},
+                    config={
+                        "configurable": {
+                            "thread_id": body.thread_id,
+                            # Forwarded to ask_task_agent (app/agent/tools.py) so the
+                            # Task Agent gets the same delegated token this request
+                            # already verified — not a new/looser credential.
+                            "bearer_token": token,
+                            "task_agent_url": settings.task_agent_url,
+                            # For the agent.a2a_delegate span's identity attributes —
+                            # telemetry, not trust: the Task Agent re-verifies the
+                            # token itself regardless of what this says.
+                            "caller_sub": identity.sub or "",
+                            "caller_agent_client_id": identity.client_id or "",
+                        }
+                    },
                     version="v2",
                 ):
                     if event["event"] != "on_chat_model_stream":

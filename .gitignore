@@ -1,10 +1,14 @@
 # Python
-backend/.venv/
-backend/__pycache__/
-backend/**/__pycache__/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
 *.pyc
-backend/.env
-backend/.env.local
+.env
+**/.env
+.env.local
+**/.env.local
+uv.lock.bak
 
 # Node
 frontend/node_modules/

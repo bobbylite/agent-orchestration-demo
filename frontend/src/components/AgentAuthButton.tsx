@@ -43,7 +43,13 @@ export function AgentAuthButton({ me, onAuthenticated }: Props) {
       onClick={handleClick}
       disabled={disabled}
       title={title}
-      className="flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium text-ink transition hover:border-brand disabled:cursor-not-allowed disabled:opacity-40"
+      className={`flex items-center gap-2 rounded-md border px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        authenticated
+          ? "border-success/30 bg-success/10 text-success"
+          : status === "error"
+            ? "border-danger/30 text-danger hover:border-danger"
+            : "border-border text-ink hover:border-brand"
+      }`}
     >
       {status === "loading" ? (
         <>
@@ -51,10 +57,10 @@ export function AgentAuthButton({ me, onAuthenticated }: Props) {
         </>
       ) : authenticated ? (
         <>
-          <span className="text-success">●</span> Agent Authenticated
+          <CheckIcon /> Agent Authenticated
         </>
       ) : status === "error" ? (
-        <span className="text-danger">Authentication failed — retry</span>
+        "Authentication failed — retry"
       ) : (
         "Authenticate Agent"
       )}
@@ -65,5 +71,13 @@ export function AgentAuthButton({ me, onAuthenticated }: Props) {
 function Spinner() {
   return (
     <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-muted border-t-transparent" />
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M2.5 7.5L5.5 10.5L11.5 3.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }

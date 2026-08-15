@@ -13,12 +13,20 @@ future session (or future you) needs to not re-derive from scratch.
 ## Stack
 
 ```
-backend/    FastAPI + LangGraph + OpenTelemetry, Python 3.14 via uv
-frontend/   React 19 + Vite 8 (rolldown) + Tailwind v4, Node >=22.12
+backend/            Chat Agent — FastAPI + LangGraph + OpenTelemetry, Python 3.14 via uv
+frontend/            React 19 + Vite 8 (rolldown) + Tailwind v4, Node >=22.12
+task-agent/          Specialist Agent — separate process, own A2A server (a2a-sdk)
+mcp-todos-server/    Standalone MCP server (fastmcp, Streamable HTTP) — mocked todos tool
+shared/              agentcore_shared — inbound-auth verification, used by backend + task-agent
 ```
 
-Both were deliberately scaffolded on latest-stable versions, not
+Everything was deliberately scaffolded on latest-stable versions, not
 conservative defaults — that's a standing preference, not a one-off.
+`shared/` is a real `uv` package, installed editable into both `backend/`
+and `task-agent/` via `[tool.uv.sources] = { path = "...", editable = true }`
+— NOT a `uv` workspace (each service keeps its own independent `.venv`;
+a full workspace merges venvs and would've changed the "run from this
+service's own directory" convention everywhere).
 
 ## The core architectural decision: auth is never inside the graph
 
@@ -45,7 +53,17 @@ choice; it's the load-bearing decision behind the whole backend structure:
 **Rule for any future work**: if you're adding an authorization/policy
 check, it is a plain function/FastAPI dependency, not a graph node — even if
 it gets a persona-like name ("policy agent") in telemetry or UI copy for
-storytelling purposes.
+storytelling purposes. `task-agent/app/policy.py`'s `TOOL_ACL` dict lookup,
+called from `TaskAgentExecutor.execute()` (via `ToolNode`'s
+`awrap_tool_call` hook) before the MCP server is ever touched, is the
+worked example — copy that shape, don't reinvent it.
+
+Inbound-auth verification itself is shared, not reimplemented per service:
+`shared/src/agentcore_shared/inbound_auth.py`'s `verify_bearer_token()` is
+used by both `backend/app/auth/inbound.py` (thin `Settings`-aware adapter)
+and `task-agent/app/agent_executor.py` (calls it directly). If you touch
+verification logic, change it there once — don't patch either call site
+independently, that's exactly the drift risk sharing it was meant to avoid.
 
 ## OpenTelemetry is the product, not an add-on
 
@@ -76,55 +94,79 @@ this code:
   each 2s poll — don't break that keying, it's what makes the panel not
   flicker.
 
-## LangGraph: current state and why it's there at all
+## LangGraph + real A2A: two graphs, two processes (built 2026-08-15)
 
-`backend/app/agent/graph.py` is currently **one node** (`assistant` → Claude,
-`MemorySaver`-checkpointed per `thread_id`). Being honest about it: at one
-node, this provides almost nothing a raw Anthropic SDK call + a dict
-wouldn't. It's in place because of an explicit ask to build something that
-"scales in complexity" into sidecars and multi-agent (A2A) work — i.e. it's
-a bet on the roadmap below, not something earning its keep today.
+Both graphs use the standard LangGraph ReAct loop shape (prebuilt
+`ToolNode` + `tools_condition`): an assistant node reasons and optionally
+emits a tool call, a tools node executes it, loop back to the assistant to
+turn the result into a natural-language answer, then `END`.
 
-### Shelved plan: multi-agent + A2A (agreed in conversation 2026-08-15, not yet built)
+**Chat Agent graph** (`backend/app/agent/graph.py`) — 2 nodes:
+- `assistant` — Claude, with `ask_task_agent` (`backend/app/agent/tools.py`)
+  bound via `bind_tools()`. Decides itself, via real tool-calling, whether
+  to delegate — nothing routes on keywords.
+- `tools` — a `ToolNode` wrapping `ask_task_agent`, which is *not* an LLM
+  call: it's a real A2A client call (`a2a.client.create_client`) to the Task
+  Agent, over HTTP/JSON-RPC, not an in-process function call. It forwards
+  the *same* delegated token this request already verified for its own
+  inbound auth (see "Identity propagation" below) — threaded through via
+  `config["configurable"]["bearer_token"]`, set in
+  `backend/app/routes/invoke.py`.
 
-Goal: demonstrate real A2A (Agent2Agent protocol), not simulate it with
-deterministic routing in one process. The distinguishing thing about A2A is
-(a) each agent has its own independent model-backed reasoning, and (b) they
-talk over the actual A2A protocol (Agent Cards, task-based JSON-RPC/HTTP,
-streamed artifacts) as **separate services**, not function calls inside one
-graph. A single-process graph with an if/else router and an ACL lookup does
-not demonstrate that, even though it might feel like "multiple agents."
+**Task/Specialist Agent graph** (`task-agent/app/graph.py`, separate
+process, own A2A server via `a2a-sdk`) — 2 nodes:
+- `task_assistant` — its own Claude call, reasons about which MCP tool to
+  invoke (`list_todos`/`add_todo`/`complete_todo`, fetched from
+  `mcp-todos-server/` via `langchain_mcp_adapters.MultiServerMCPClient` and
+  bound the same way as the Chat Agent's tool).
+- `execute_tool` — a `ToolNode` over those MCP-backed tools, with the
+  policy ACL wired in via `awrap_tool_call` (see the core rule above) —
+  denied calls return a `ToolMessage` explaining the denial, so the model
+  can tell the user, rather than silently failing.
 
-Agreed shape:
+`TaskAgentExecutor.execute()` (`task-agent/app/agent_executor.py`) runs
+inbound auth *before* invoking this graph at all — pulls the bearer token
+out of `context.call_context.state["headers"]`, verifies it, and only then
+calls `graph.ainvoke(...)`, passing the verified `client_id` through
+`config["configurable"]["client_id"]` for the policy check to use.
 
-**Chat Agent graph** (this backend, what `/api/invoke` calls) — 2 nodes:
-- `assistant` — model with a tool bound (e.g. `ask_task_agent`); decides
-  itself, via real tool-calling, whether to delegate.
-- `a2a_delegate` — *not* an LLM call. An async node acting as the A2A
-  client: builds a Task, sends it to the Task Agent's A2A server (via the
-  official `a2a-sdk` Python package), returns the artifact.
-- Loop: `assistant` →(tool call?)→ `a2a_delegate` → back to `assistant` (to
-  turn the artifact into a natural-language answer) → `END`. Same shape as
-  LangGraph's prebuilt ReAct agent; the "tool" just happens to be a
-  cross-process A2A call.
+### Identity propagation across the A2A hop
 
-**Task/Specialist Agent graph** (new, separate service/process, exposes its
-own A2A server) — 2 nodes:
-- `task_assistant` — its own model call, reasons about which mocked tool to
-  invoke (first candidate: `list_todos`).
-- `execute_tool` — calls the mocked tool, loops back to `task_assistant` to
-  package the result as an A2A artifact.
+The Chat Agent does **not** mint a new/nested token for the Task Agent
+call — it forwards the exact same RFC 8693 delegated token it already holds.
+The Task Agent independently re-verifies that token itself (same
+`agentcore_shared.verify_bearer_token`, same issuer/audience config,
+duplicated across `backend/.env` and `task-agent/.env` on purpose — see
+"Known gotchas"). This is deliberate: it proves the Task Agent trusts
+nothing about the caller except a credential it can verify itself, which is
+the actual property AgentCore-style inbound auth is for. A follow-up not
+yet built: the Task Agent expecting a *different*, narrower audience,
+requiring the Chat Agent to do a second token exchange before delegating.
 
-**Policy/ACL check** — still *not* a graph node in either graph. It's a
-FastAPI-level gate in front of the Task Agent's A2A endpoint, following the
-exact `inbound_auth.verify` pattern: checks the calling agent's identity
-(RFC 8693 `act` claim — already implemented and decoded in
-`InboundIdentity.actor_sub`) plus the delegated user's identity against an
-ACL for the requested tool, before the Task Agent's own graph is touched.
+### Verified end-to-end (2026-08-15)
 
-**4 LangGraph nodes total, across 2 separate graphs/processes.** Do not
-start building this without confirming first — it was explicitly shelved
-pending go-ahead, not abandoned.
+Real signed JWTs (RS256, self-issued during testing against a throwaway
+mock OIDC/JWKS endpoint — not mocked function calls) confirmed: no
+token → task fails before the graph runs; forged signature → rejected;
+valid token from a client_id *not* in the ACL → tool call denied, model
+explains it to the user; valid token + allowed tool → real MCP data flows
+back through the A2A artifact into the Chat Agent's final answer. Also
+observed for free: `a2a-sdk` has its own OTel instrumentation
+(`a2a.client.transports.jsonrpc.*` spans) that flows into the same
+`RecordingSpanProcessor` ring buffer automatically, alongside
+`agent.a2a_delegate`.
+
+### Not yet built
+
+- Cross-service telemetry aggregation — `task-agent/` has no
+  `RecordingSpanProcessor`/`/telemetry` endpoint of its own yet; its
+  activity isn't visible in the frontend's Telemetry panel, only via its
+  own console/logs. The Chat Agent's `agent.a2a_delegate` span *does* show
+  the delegation round-trip in the existing panel.
+- Docker/compose wiring for `task-agent/` and `mcp-todos-server/` — dev
+  workflow only (`uv run` / `python server.py` per service) so far.
+- `task-agent` having its own distinct PingOne identity (see "Identity
+  propagation" above).
 
 ## What's built (as of 2026-08-15)
 
@@ -134,8 +176,11 @@ pending go-ahead, not abandoned.
 - Inbound auth enforcement on `/api/invoke` (see above) — mandatory, not
   optional; the session token alone is rejected.
 - OpenTelemetry spans + redaction + ring buffer, live in the Telemetry panel.
-- Single-node LangGraph chat agent (Claude), streamed over SSE, Markdown-
-  rendered, per-thread checkpointed.
+- LangGraph chat agent (Claude), streamed over SSE, Markdown-rendered,
+  per-thread checkpointed — now 2 nodes, with real A2A delegation to a
+  separate Task Agent service for todos (see "LangGraph + real A2A" below).
+- Standalone `mcp-todos-server/` (in-memory, no auth — trusted-network-only
+  demo service) and `task-agent/` (own A2A server, own policy ACL gate).
 - UI styled to match Ping Identity's actual production site (pulled real
   hex values and Montserrat from their live CSS, not guessed): dark navy ink
   `#051727` on near-white `#fbfbfc`, red/orange brand gradient
@@ -170,11 +215,36 @@ pending go-ahead, not abandoned.
   authlib 1.7+ — this codebase uses `joserfc` throughout for JWT/JWE, don't
   add `authlib` back for jose functionality.
 - Don't broadly `pkill -f vite` / `pkill -f uvicorn` when testing — it kills
-  every matching process, including ones the user started themselves.
+  every matching process, including ones the user started themselves. Same
+  caution now applies to `pkill -f "uvicorn app.main:app"` — matches both
+  `backend/` and `task-agent/`; kill by port or PID instead.
+- **`backend/.env` and `task-agent/.env`'s `OIDC_DISCOVERY_URL` /
+  `AGENT_EXPECTED_AUDIENCE` must match exactly** — the Task Agent verifies
+  the same delegated token, independently, with its own copy of the same
+  config. A mismatch here fails the same way a real misconfigured PingOne
+  resource would (`audience_mismatch` / `issuer_mismatch`), which is
+  correct behavior, not a bug — but it's easy to forget to update both.
+- **Running `python script.py` (not `-c`) with `uv run` doesn't put the
+  service's own directory on `sys.path`** the way `-c`/inline code does —
+  Python adds the *script's* directory, not cwd. A standalone test script
+  living outside `backend/`/`task-agent/` needs `PYTHONPATH=.` (or to live
+  inside the service directory) to import `app.*`.
+- **`langgraph.prebuilt.ToolNode`'s `awrap_tool_call` hook** is the right
+  place for any per-tool-call cross-cutting check (policy ACLs, rate
+  limits, etc.) — `request.runtime.config["configurable"]` is how it reads
+  values threaded in from the outer `graph.ainvoke(...)`/`astream_events`
+  call. This is what `task-agent/app/graph.py`'s policy gate uses; prefer
+  it over wrapping individual `@tool` functions by hand.
+- A2A client responses are protobuf (`a2a_pb2.StreamResponse` from
+  `client.send_message(...)`) — check `chunk.HasField("task")`, then
+  `chunk.task.artifacts[-1].parts[-1].text` for the final answer, not a
+  plain Python object with dict-like access.
 
 ## Skills
 
-- `run` — start both dev servers correctly (handles the cwd/Node gotchas
-  above).
+- `run` — start all services correctly (handles the cwd/Node gotchas above;
+  now covers `backend/`, `frontend/`, `task-agent/`, and
+  `mcp-todos-server/`).
 - `extend-agent-graph` — read before adding any LangGraph node, tool, or
-  agent; has the full A2A plan detail beyond the summary above.
+  agent; has the full worked pattern (inbound auth + policy gate shapes) to
+  copy for anything new.

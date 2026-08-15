@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
 
+    # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent
+    task_agent_url: str = Field(default="http://localhost:9010")
+
     # Networking
     app_base_url: str = Field(default="http://localhost:8000")
     frontend_origin: str = Field(default="http://localhost:5173")

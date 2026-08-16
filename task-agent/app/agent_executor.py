@@ -8,8 +8,6 @@ CLAUDE.md's "core architectural decision" section.
 
 from __future__ import annotations
 
-from typing import Any
-
 from a2a.helpers import get_message_text, new_task_from_user_message, new_text_message, new_text_part
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -18,21 +16,7 @@ from a2a.types import TaskState
 from agentorchestration_shared import InboundAuthError, verify_bearer_token
 
 from app.config import Settings
-from app.graph import build_graph
-
-
-def _extract_text(content: Any) -> str:
-    """AIMessage.content is `str | list[dict]` depending on the response
-    shape (e.g. a multi-block Anthropic response) — new_text_part() needs a
-    plain str, so this normalizes either shape. Same pattern as
-    backend/app/routes/invoke.py's own _extract_text."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "".join(
-            block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"
-        )
-    return str(content)
+from app.graph import _extract_text, build_graph
 
 
 class TaskAgentExecutor(AgentExecutor):
@@ -94,7 +78,17 @@ class TaskAgentExecutor(AgentExecutor):
         graph = await build_graph(self.settings)
         query = get_message_text(context.message)
         result = await graph.ainvoke(
-            {"messages": [("human", query)]},
+            {
+                "messages": [("human", query)],
+                # NOT the human's literal message — this is the request the
+                # Chat Agent's own LLM constructed when it decided to
+                # delegate (query IS that string; see app/graph.py's
+                # AgentState docstring). What the judge node compares
+                # answers against.
+                "delegated_request": query,
+                "judge_attempts": 0,
+                "judge_status": "",
+            },
             config={
                 "configurable": {
                     # `agent_client_id` (not `client_id`) — the custom claim

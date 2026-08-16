@@ -1,5 +1,6 @@
 """The Task Agent's own graph — independent reasoning (task_assistant) plus
-a scope-stepping tool node (execute_tool) backed by the todos MCP server.
+a scope-stepping tool node (execute_tool) backed by the todos MCP server,
+plus a judge node that checks the proposed answer before it's returned.
 
 Same two-node assistant<->tools loop shape as the Chat Agent
 (backend/app/agent/graph.py), for the same reason: this is the standard
@@ -20,15 +21,23 @@ connection and invokes the real tool through it. This is what makes
 scopes, so a read succeeding earlier never gates whether a later write is
 attempted, and vice versa. See CLAUDE.md "Identity propagation across the
 A2A hop" (2026-08-16 redesign).
+
+The judge node (see "Judge agent" below) is a *quality* check, not a
+security one — unlike everything above, it needs no identity of its own
+and correctly lives inside the graph (CLAUDE.md's "auth never inside the
+graph" rule is about authorization, not an LLM's own judgment of its work).
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any, TypedDict
+import logging
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 import httpx
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_groq import ChatGroq
 from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import StreamableHttpConnection
@@ -37,15 +46,46 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.prebuilt.tool_node import ToolCallRequest
-from pydantic import SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from app import policy
 from app.config import Settings
 from app.token_grants import client_credentials_grant, get_token_endpoint, token_exchange
 
+logger = logging.getLogger(__name__)
+
 
 class AgentState(TypedDict):
+    # Always present once the graph is running — the entry point always
+    # seeds it. Individual nodes' *return values* are partial updates
+    # though (a node returns only the keys it changed), which is why node
+    # functions below are typed `-> dict`, not `-> AgentState` — annotating
+    # them as the full state would incorrectly claim every node returns
+    # every key.
     messages: Annotated[list[BaseMessage], add_messages]
+    # The request this service was actually delegated — NOT the human's
+    # literal message, which this service never sees (see the judge
+    # section below for why that's the deliberately correct scope). Set
+    # once at invocation.
+    delegated_request: NotRequired[str]
+    judge_attempts: NotRequired[int]
+    judge_status: NotRequired[str]  # "" / "pass" / "fail" / "gave_up"
+
+
+def _extract_text(content: Any) -> str:
+    """AIMessage.content is `str | list[dict]` depending on the response
+    shape (e.g. a multi-block Anthropic response) — normalize either shape
+    before passing it anywhere that needs a real `str`. Canonical copy for
+    this service; app/agent_executor.py imports it from here rather than
+    keeping its own (same normalization backend/app/routes/invoke.py has
+    its own separate copy of — different service, not shared)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"
+        )
+    return str(content)
 
 
 def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
@@ -184,11 +224,118 @@ def _build_task_assistant_node(settings: Settings, tools: list):
         stop=None,
     ).bind_tools(tools)
 
-    async def task_assistant(state: AgentState, config: RunnableConfig) -> AgentState:
+    async def task_assistant(state: AgentState, config: RunnableConfig) -> dict:
         response = await llm.ainvoke([_SYSTEM, *state["messages"]], config=config)
         return {"messages": [response]}
 
     return task_assistant
+
+
+# --- Judge agent -------------------------------------------------------
+#
+# A quality check, not a security one: evaluates task_assistant's proposed
+# answer against `delegated_request` (the task this service was actually
+# asked to do — see AgentState's docstring for why that's the deliberately
+# correct comparison, not the human's original message) and decides
+# whether it's good enough. Needs no identity of its own — it never
+# touches a protected resource, only text already produced — so it
+# correctly lives inside the graph, unlike every auth/policy check above.
+
+
+class JudgeVerdict(BaseModel):
+    status: Literal["pass", "fail"]
+    reason: str
+    missing_info: list[str] = Field(default_factory=list)
+
+
+_JUDGE_SYSTEM = SystemMessage(
+    content=(
+        "You are a judge evaluating whether a specialist agent's proposed answer actually "
+        "satisfies the request it was given. You will be shown the REQUEST and the PROPOSED "
+        "ANSWER.\n\n"
+        "Return status=\"pass\" if the answer genuinely addresses the request — and, when the "
+        "request implied an action (adding or completing a todo), the answer shows real evidence "
+        "the action was taken (e.g. a todo id), not just a claim that it was done.\n\n"
+        "Return status=\"fail\" if the answer is incomplete, evasive, doesn't address the request, "
+        "or claims an action happened with no evidence of it. Keep `reason` short and concrete; "
+        "use `missing_info` to list specific things the answer should have included but didn't."
+    )
+)
+
+
+_DEFAULT_GROQ_JUDGE_MODEL = "llama-3.3-70b-versatile"
+
+
+def _build_judge_llm(settings: Settings) -> BaseChatModel:
+    """The judge only ever reads REQUEST/PROPOSED ANSWER text and returns a
+    structured verdict — no tool calls of its own, no delegation token, no
+    identity — so unlike task_assistant's LLM it isn't tied to Anthropic.
+    `judge_provider="groq"` runs it on Groq's free tier instead (rate-
+    limited, not billed); the model still needs tool-calling support since
+    `.with_structured_output()` uses it under the hood, which Groq's hosted
+    Llama models provide."""
+    if settings.judge_provider == "groq":
+        return ChatGroq(
+            model=settings.judge_model or _DEFAULT_GROQ_JUDGE_MODEL,
+            api_key=SecretStr(settings.groq_api_key or ""),
+        )
+    return ChatAnthropic(
+        model_name=settings.judge_model or settings.agent_model,
+        api_key=SecretStr(settings.anthropic_api_key or ""),
+        timeout=None,
+        stop=None,
+    )
+
+
+def _build_judge_node(settings: Settings):
+    judge_llm = _build_judge_llm(settings).with_structured_output(JudgeVerdict)  # binds the contract to the verdict
+
+    async def judge(state: AgentState, config: RunnableConfig) -> dict:
+        attempts = state.get("judge_attempts", 0) + 1
+        if attempts > settings.judge_max_attempts:
+            logger.info("judge: gave up after %d attempts, returning last answer as-is", attempts - 1)
+            return {"judge_attempts": attempts, "judge_status": "gave_up"}
+
+        proposed_answer = _extract_text(state["messages"][-1].content)
+        try:
+            verdict = await judge_llm.ainvoke(
+                [
+                    _JUDGE_SYSTEM,
+                    HumanMessage(
+                        content=f"REQUEST:\n{state.get('delegated_request', '')}\n\nPROPOSED ANSWER:\n{proposed_answer}"
+                    ),
+                ],
+                config=config,
+            )
+        except Exception:
+            # Fail OPEN, not closed — unlike every security check in this
+            # app, a broken judge call shouldn't block a real answer from
+            # reaching the user. Deliberately the opposite failure
+            # direction from anything auth-related.
+            logger.exception("judge: evaluation call failed, passing answer through")
+            return {"judge_attempts": attempts, "judge_status": "pass"}
+
+        assert isinstance(verdict, JudgeVerdict)
+        logger.info("judge: attempt=%d status=%s reason=%s", attempts, verdict.status, verdict.reason)
+
+        if verdict.status == "fail":
+            feedback = f"Your previous answer didn't fully satisfy the request: {verdict.reason}"
+            if verdict.missing_info:
+                feedback += f" Missing: {', '.join(verdict.missing_info)}."
+            feedback += " Please address this and try again."
+            return {
+                "messages": [HumanMessage(content=feedback)],
+                "judge_attempts": attempts,
+                "judge_status": "fail",
+            }
+
+        return {"judge_attempts": attempts, "judge_status": "pass"}
+
+    return judge
+
+
+def _judge_routing(state: AgentState) -> str:
+    return "retry" if state.get("judge_status") == "fail" else "done"
 
 
 async def build_graph(settings: Settings) -> CompiledStateGraph:
@@ -202,6 +349,14 @@ async def build_graph(settings: Settings) -> CompiledStateGraph:
     graph.add_node("task_assistant", _build_task_assistant_node(settings, tools))
     graph.add_node("execute_tool", ToolNode(tools, awrap_tool_call=_wrap))
     graph.set_entry_point("task_assistant")
+
+    if settings.judge_enabled:
+        graph.add_node("judge", _build_judge_node(settings))
+        graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: "judge"})
+        graph.add_conditional_edges("judge", _judge_routing, {"retry": "task_assistant", "done": END})
+        graph.add_edge("execute_tool", "task_assistant")
+        return graph.compile()
+
     graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: END})
     graph.add_edge("execute_tool", "task_assistant")
     return graph.compile()

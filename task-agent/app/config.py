@@ -65,6 +65,33 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
 
+    # Judge node (app/graph.py) — evaluates task_assistant's proposed
+    # answer against the request this service was actually delegated
+    # (not the human's literal message, which this service never sees;
+    # see CLAUDE.md). Needs no identity of its own — it never touches a
+    # protected resource, just evaluates text already produced.
+    judge_enabled: bool = Field(default=True)
+    # "anthropic" (default) or "groq" — the judge is a pure text-in/
+    # structured-verdict-out evaluation with no tool use of its own, so
+    # it's a natural place to run a cheaper/free provider instead of
+    # spending Anthropic tokens on it. Groq's free tier is genuinely free
+    # (rate-limited, not credit-metered) and its hosted Llama models
+    # support tool-calling, which is what `.with_structured_output()`
+    # needs under the hood.
+    judge_provider: str = Field(default="anthropic")
+    # Falls back to agent_model (if provider="anthropic") or a Groq default
+    # model (if provider="groq") when unset — see app/graph.py's
+    # _build_judge_node. Lets a cheaper/different model judge without
+    # forcing it.
+    judge_model: str | None = Field(default=None)
+    # Original attempt + this many retries before giving up and returning
+    # the last answer anyway, rather than looping forever.
+    judge_max_attempts: int = Field(default=2)
+
+    # Only needed when judge_provider="groq". Free API key from
+    # console.groq.com — no billing required for the free tier.
+    groq_api_key: str | None = Field(default=None)
+
     mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
 
     host: str = Field(default="0.0.0.0")

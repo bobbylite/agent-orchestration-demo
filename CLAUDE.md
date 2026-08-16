@@ -355,6 +355,91 @@ text. Two chained-exchange tokens inspected directly:
   tool failure yet — unlike the Chat-Agent-level `NEEDS_AGENT_AUTH_MARKER`
   flow, which is fully interactive.
 
+## Judge node in the Task Agent's graph (added 2026-08-16)
+
+`task-agent/app/graph.py` gained a third node, `judge` — after
+`task_assistant` produces what would otherwise be the final answer, an
+LLM call (`ChatAnthropic(...).with_structured_output(JudgeVerdict)`,
+`JudgeVerdict` a Pydantic model with `status: Literal["pass","fail"]`,
+`reason: str`, `missing_info: list[str]`) evaluates it against
+`AgentState["delegated_request"]` and decides whether to let it through or
+loop back to `task_assistant` with feedback. Toggle: `Settings.judge_enabled`
+(default `True`); disabling it restores the exact pre-judge graph shape
+(`task_assistant`'s `tools_condition` wired straight to `END`).
+
+**This is correctly a graph node, unlike every auth/policy check in this
+codebase.** CLAUDE.md's core rule ("auth never inside the graph") is
+specifically about *authorization* decisions the model's own output
+shouldn't be able to influence. A judge's entire job is being the model's
+own quality judgment — a different category — so it belongs inside the
+graph. It also needs no identity of its own: it only evaluates text
+already produced, never touches a protected resource, so it never crosses
+the delegation boundary the rest of this app's auth chain exists to gate.
+
+**What "the request" means here was a real design question, resolved
+mid-planning.** Task Agent never sees the human's literal chat message —
+`backend/app/agent/tools.py`'s `ask_task_agent_read`/`write` take a
+`request: str` the *Chat Agent's own LLM* writes when it decides to
+delegate, and that string (captured via `get_message_text(context.message)`
+in `task-agent/app/agent_executor.py`) is what the judge compares against,
+stored as `AgentState["delegated_request"]` — deliberately not named
+`original_request`, which would overstate what it is. This is the
+architecturally correct scope, not just the cheap one: Task Agent's actual
+contract is with its caller (the Chat Agent), not an end human it never
+talks to directly; if the Chat Agent's own paraphrase drops something the
+user asked for, that's a Chat-Agent-level fidelity concern, outside what a
+Task-Agent-side judge can or should catch.
+
+**Fails open, not closed — the opposite direction from every security
+check in this app.** A broken judge call (exception, malformed structured
+output) is caught and treated as `"pass"`; a quality-control mechanism
+malfunctioning should never block a real, working answer from reaching the
+user, unlike an auth check, which must always fail closed.
+
+**Bounded retries**: `Settings.judge_max_attempts` (default `2` — the
+original attempt plus one retry). Exceeding it sets
+`judge_status = "gave_up"` and returns the last answer produced rather
+than looping forever or hard-failing the task. Verified live
+(`judge_enabled=true`, no delegation token so every tool call was denied):
+attempt 1 failed the judge (agent gave up without genuinely trying),
+attempt 2 also failed, attempt 3 short-circuited straight to `"gave_up"`
+without even calling the LLM — exactly `judge_max_attempts` semantics.
+`judge_enabled=false` reproduces the original single-pass behavior
+byte-for-byte (empty `judge_status`, first answer returned unchanged).
+
+**Demo visibility is `logging`, not OpenTelemetry** — task-agent has no
+`RecordingSpanProcessor`/telemetry endpoint at all yet (see "Not yet
+built" above), so the judge logs each verdict (`logger.info` — attempt
+number, status, reason) to its own console rather than emitting a real
+span. Wiring this into real spans is a natural follow-up once cross-service
+telemetry aggregation exists, not part of this change.
+
+**Small bundled cleanup**: `_extract_text()` (the `AIMessage.content:
+str | list[dict]` normalizer) had separate copies in
+`task-agent/app/agent_executor.py` and `backend/app/routes/invoke.py`. The
+judge needed the same normalization to read the proposed answer, so the
+canonical copy for this service moved into `task-agent/app/graph.py`
+(`agent_executor.py` now imports it from there) — `backend/`'s stays
+separate, different service, not shared.
+
+**The judge can run on a different LLM provider than `task_assistant`**
+(`Settings.judge_provider`, `"anthropic"` default or `"groq"`) — deliberate,
+because the judge is a pure text-in/structured-verdict-out evaluation with
+no tool calls, no delegation token, and no identity of its own, unlike
+`task_assistant`'s LLM. `task-agent/app/graph.py`'s `_build_judge_llm()`
+constructs either `ChatAnthropic` or `ChatGroq` and returns a plain
+`BaseChatModel`; `_build_judge_node()` calls `.with_structured_output(JudgeVerdict)`
+on whichever came back, unchanged. Groq's free tier is genuinely free
+(rate-limited, not credit-metered) and its hosted Llama models support
+tool-calling, which `.with_structured_output()` needs under the hood — the
+default Groq judge model is `llama-3.3-70b-versatile`
+(`_DEFAULT_GROQ_JUDGE_MODEL`), used when `JUDGE_MODEL` is unset. Set via
+`task-agent/.env`: `JUDGE_PROVIDER=groq` + `GROQ_API_KEY=<free key from
+console.groq.com>`. If `GROQ_API_KEY` is empty or invalid while
+`JUDGE_PROVIDER=groq`, the judge call fails and the fail-open behavior
+above kicks in (`status="pass"`) — the task still returns an answer, just
+without a real judge pass, rather than crashing the task.
+
 ## MCP server: its own UI, PingOne SSO, and an OBO audit log (2026-08-15)
 
 `mcp-todos-server/` stopped being a bare, unauthenticated `fastmcp`

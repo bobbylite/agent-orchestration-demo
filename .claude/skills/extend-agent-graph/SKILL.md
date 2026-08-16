@@ -38,6 +38,17 @@ per-tool-call (via `awrap_tool_call`). Don't invent a third pattern, and
 don't give either check its own LLM call unless there's a genuine need for
 model judgment (there wasn't for either of the two built here).
 
+**This rule is about authorization, not every graph node that evaluates
+something.** `task-agent/app/graph.py`'s `judge` node (added 2026-08-16,
+see CLAUDE.md "Judge node in the Task Agent's graph") *is* an LLM call
+inside the graph, and that's correct — it evaluates the *quality* of an
+already-produced answer against the request, needs no identity of its own
+(never touches a protected resource), and its failure mode is the opposite
+of a security check: fail *open* (a broken judge shouldn't block a real
+answer), not closed. Don't confuse "should this be inside the graph" with
+"is this an LLM call" — the actual test is whether it's deciding *whether
+the caller is allowed to be here*, which the judge never does.
+
 ## Current state — two graphs, two processes, real A2A between them
 
 Same two-node ReAct loop shape in both (prebuilt `ToolNode` +

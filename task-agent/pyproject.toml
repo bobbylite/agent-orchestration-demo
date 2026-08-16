@@ -12,6 +12,7 @@ dependencies = [
     "langchain-anthropic>=0.3.0",
     "langchain-mcp-adapters>=0.3.0",
     "agentorchestration-shared",
+    "langchain-groq>=1.1.3",
 ]
 
 [tool.uv.sources]

@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app import policy
 from app.config import Settings
+from app.telemetry import with_span
 from app.token_grants import client_credentials_grant, get_token_endpoint, token_exchange
 
 logger = logging.getLogger(__name__)
@@ -292,44 +293,72 @@ def _build_judge_node(settings: Settings):
 
     async def judge(state: AgentState, config: RunnableConfig) -> dict:
         attempts = state.get("judge_attempts", 0) + 1
-        if attempts > settings.judge_max_attempts:
-            logger.info("judge: gave up after %d attempts, returning last answer as-is", attempts - 1)
-            return {"judge_attempts": attempts, "judge_status": "gave_up"}
 
-        proposed_answer = _extract_text(state["messages"][-1].content)
-        try:
-            verdict = await judge_llm.ainvoke(
-                [
-                    _JUDGE_SYSTEM,
-                    HumanMessage(
-                        content=f"REQUEST:\n{state.get('delegated_request', '')}\n\nPROPOSED ANSWER:\n{proposed_answer}"
-                    ),
-                ],
-                config=config,
-            )
-        except Exception:
-            # Fail OPEN, not closed — unlike every security check in this
-            # app, a broken judge call shouldn't block a real answer from
-            # reaching the user. Deliberately the opposite failure
-            # direction from anything auth-related.
-            logger.exception("judge: evaluation call failed, passing answer through")
+        # One span per attempt, nested under agent_executor.py's
+        # a2a.task_execute span via OTel's ambient context — this is what
+        # lets the diagram/telemetry panel show pass vs. fail per attempt,
+        # not just a single opaque "judge ran" marker. `judge.status` is
+        # deliberately set FIRST among the per-attempt attributes (right
+        # after `judge.attempt`, before reason/provider/max_attempts) —
+        # StoryNode.tsx only previews a matched span's first 3 attributes,
+        # and pass/fail is the one this feature exists to surface there.
+        with with_span("judge.evaluate", {"judge.attempt": attempts}) as span:
+            if attempts > settings.judge_max_attempts:
+                logger.info("judge: gave up after %d attempts, returning last answer as-is", attempts - 1)
+                span.set_attribute("judge.status", "gave_up")
+                span.set_attribute("judge.reason", f"exceeded judge_max_attempts ({settings.judge_max_attempts})")
+                span.set_attribute("judge.provider", settings.judge_provider)
+                return {"judge_attempts": attempts, "judge_status": "gave_up"}
+
+            proposed_answer = _extract_text(state["messages"][-1].content)
+            try:
+                verdict = await judge_llm.ainvoke(
+                    [
+                        _JUDGE_SYSTEM,
+                        HumanMessage(
+                            content=f"REQUEST:\n{state.get('delegated_request', '')}\n\nPROPOSED ANSWER:\n{proposed_answer}"
+                        ),
+                    ],
+                    config=config,
+                )
+            except Exception:
+                # Fail OPEN, not closed — unlike every security check in this
+                # app, a broken judge call shouldn't block a real answer from
+                # reaching the user. Deliberately the opposite failure
+                # direction from anything auth-related. Not a span-level
+                # error either, for the same reason — see the note on
+                # verdict.status below.
+                logger.exception("judge: evaluation call failed, passing answer through")
+                span.set_attribute("judge.status", "pass")
+                span.set_attribute("judge.reason", "evaluation call failed — fail-open")
+                span.set_attribute("judge.provider", settings.judge_provider)
+                return {"judge_attempts": attempts, "judge_status": "pass"}
+
+            assert isinstance(verdict, JudgeVerdict)
+            logger.info("judge: attempt=%d status=%s reason=%s", attempts, verdict.status, verdict.reason)
+
+            # judge.status="fail" is a normal business outcome, not a span
+            # execution failure — deliberately NOT calling
+            # span.set_status(ERROR) here, so a red span in this panel
+            # always means the judge call itself broke, not that it did its
+            # job and said no.
+            span.set_attribute("judge.status", verdict.status)
+            span.set_attribute("judge.reason", verdict.reason)
+            span.set_attribute("judge.provider", settings.judge_provider)
+            span.set_attribute("judge.missing_info_count", len(verdict.missing_info))
+
+            if verdict.status == "fail":
+                feedback = f"Your previous answer didn't fully satisfy the request: {verdict.reason}"
+                if verdict.missing_info:
+                    feedback += f" Missing: {', '.join(verdict.missing_info)}."
+                feedback += " Please address this and try again."
+                return {
+                    "messages": [HumanMessage(content=feedback)],
+                    "judge_attempts": attempts,
+                    "judge_status": "fail",
+                }
+
             return {"judge_attempts": attempts, "judge_status": "pass"}
-
-        assert isinstance(verdict, JudgeVerdict)
-        logger.info("judge: attempt=%d status=%s reason=%s", attempts, verdict.status, verdict.reason)
-
-        if verdict.status == "fail":
-            feedback = f"Your previous answer didn't fully satisfy the request: {verdict.reason}"
-            if verdict.missing_info:
-                feedback += f" Missing: {', '.join(verdict.missing_info)}."
-            feedback += " Please address this and try again."
-            return {
-                "messages": [HumanMessage(content=feedback)],
-                "judge_attempts": attempts,
-                "judge_status": "fail",
-            }
-
-        return {"judge_attempts": attempts, "judge_status": "pass"}
 
     return judge
 

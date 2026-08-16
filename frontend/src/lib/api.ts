@@ -19,6 +19,11 @@ export interface MeResponse {
 
 export interface TelemetrySpan {
   name: string
+  /** OTel resource `service.name` — disambiguates spans that share a name
+   * across services (e.g. "inbound_auth.verify" is emitted by both backend/
+   * and task-agent/) now that TelemetryPanel merges both services' spans
+   * into one array. See diagram/flowConfig.ts's SERVICE_* constants. */
+  service: string
   trace_id: string
   span_id: string
   parent_span_id: string | null
@@ -42,6 +47,13 @@ export const api = {
   getConfig: () => getJson<ConfigResponse>("/api/config"),
   getMe: () => getJson<MeResponse>("/api/auth/me"),
   getTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/api/telemetry"),
+  /** task-agent's own spans (inbound_auth.verify, a2a.task_execute,
+   * judge.evaluate — see task-agent/app/telemetry.py) — a separate process
+   * from the Chat Agent backend, proxied via vite (see vite.config.ts)
+   * rather than merged server-side. Best-effort: task-agent may not be
+   * running in every demo, so callers should treat a failure here as "no
+   * data yet", not a hard error. */
+  getTaskAgentTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/task-agent-api/telemetry"),
   /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
    * Token Exchange, scoped generically (not per todos:read/write action;
    * the Task Agent decides that itself once it holds this credential). */

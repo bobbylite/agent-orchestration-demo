@@ -14,6 +14,16 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // task-agent's own /telemetry endpoint (app/telemetry.py) — proxied
+      // rather than given CORS middleware, same "same-origin in dev"
+      // reasoning as /api above. No cookies involved here (task-agent's
+      // /telemetry isn't session-gated), but this keeps every cross-service
+      // call the diagram makes going through one pattern.
+      '/task-agent-api': {
+        target: 'http://localhost:9010',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/task-agent-api/, ''),
+      },
     },
   },
 })

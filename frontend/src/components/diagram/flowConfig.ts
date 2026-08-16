@@ -2,19 +2,28 @@ import type { TelemetrySpan } from "../../lib/api"
 
 export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge"
 
+/** OTel resource `service.name` values — see backend/app/telemetry.py and
+ * task-agent/app/telemetry.py's RecordingSpanProcessor, which both stamp
+ * every emitted span with this. Needed because span *names* aren't
+ * globally unique across services (both emit "inbound_auth.verify") now
+ * that TelemetryPanel merges both processes' spans into one array. */
+export const SERVICE_CHAT_AGENT = "agentorchestration-console-backend"
+export const SERVICE_TASK_AGENT = "agentorchestration-console-task-agent"
+
 export interface StoryNodeData {
   [key: string]: unknown
   title: string
   subtitle: string
   kind: NodeKind
-  /** Span names (from backend/app/telemetry.py's ring buffer) whose latest
-   * instance's attributes get shown on this node — this Chat Agent process
-   * is the only one whose spans reach this panel today, see CLAUDE.md
-   * "Cross-service telemetry aggregation" — not yet built for task-agent
-   * or mcp-todos-server. Nodes for those services show `instrumented`
-   * spans as empty and render as "not yet aggregated here" instead of
-   * pretending to have live data. */
+  /** Span names whose latest instance's attributes get shown on this node.
+   * mcp-todos-server has no telemetry wiring at all yet (see CLAUDE.md
+   * "Cross-service telemetry aggregation" / "Not yet built") — its nodes
+   * (mcp, audit) keep spanNames empty and render "not yet aggregated
+   * here" rather than pretending to have live data. */
   spanNames: string[];
+  /** Which service emitted spanNames above — required whenever spanNames
+   * is non-empty, since name alone doesn't disambiguate across services. */
+  service?: string
 }
 
 export interface StoryEdgeMeta {
@@ -22,6 +31,8 @@ export interface StoryEdgeMeta {
    * (animated + lit up vs. dim/dashed). Undefined = this hop happens on
    * another service's process and isn't instrumented into this panel yet. */
   spanName?: string
+  /** Required whenever spanName is set — see StoryNodeData.service. */
+  service?: string
   attributeKeys?: string[]
 }
 
@@ -48,6 +59,7 @@ export const STORY_NODES: Array<{
       subtitle: "OIDC Identity Provider",
       kind: "idp",
       spanNames: ["oidc.login.redirect", "oidc.login.callback", "agent.client_credentials", "agent.token_exchange"],
+      service: SERVICE_CHAT_AGENT,
     },
   },
   {
@@ -58,6 +70,7 @@ export const STORY_NODES: Array<{
       subtitle: "FastAPI + LangGraph (backend/)",
       kind: "agent",
       spanNames: ["agent.invoke", "inbound_auth.verify"],
+      service: SERVICE_CHAT_AGENT,
     },
   },
   {
@@ -67,7 +80,8 @@ export const STORY_NODES: Array<{
       title: "Task Agent",
       subtitle: "Own A2A server (task-agent/)",
       kind: "specialist",
-      spanNames: [],
+      spanNames: ["a2a.task_execute", "inbound_auth.verify"],
+      service: SERVICE_TASK_AGENT,
     },
   },
   {
@@ -100,7 +114,8 @@ export const STORY_NODES: Array<{
       // it already produced, no delegation token, no identity of its own.
       subtitle: "Evaluator-optimizer loop — Claude or Groq",
       kind: "judge",
-      spanNames: [],
+      spanNames: ["judge.evaluate"],
+      service: SERVICE_TASK_AGENT,
     },
   },
 ]
@@ -123,7 +138,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "left",
     label: "1. Sign in — Authorization Code + PKCE (S256)",
     detail: "ID token verified against PingOne's JWKS; session sealed into a JWE HttpOnly cookie.",
-    meta: { spanName: "oidc.login.callback", attributeKeys: ["identity.sub"] },
+    meta: { spanName: "oidc.login.callback", service: SERVICE_CHAT_AGENT, attributeKeys: ["identity.sub"] },
   },
   {
     id: "e-session",
@@ -143,7 +158,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "bottom",
     label: "3. Approve action — Client Credentials + Token Exchange (RFC 8693)",
     detail: "Scoped to exactly one capability (e.g. todos:read), requested the first time it's needed.",
-    meta: { spanName: "agent.token_exchange", attributeKeys: ["oauth.scope", "identity.agent_client_id"] },
+    meta: { spanName: "agent.token_exchange", service: SERVICE_CHAT_AGENT, attributeKeys: ["oauth.scope", "identity.agent_client_id"] },
   },
   {
     id: "e-verify-chat",
@@ -153,7 +168,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "bottom2",
     label: "Inbound auth — verify JWT (JWKS), fresh every call",
     detail: "Signature, issuer, expiry, audience — never trusted just because it's in a sealed cookie.",
-    meta: { spanName: "inbound_auth.verify", attributeKeys: ["identity.agent_client_id"] },
+    meta: { spanName: "inbound_auth.verify", service: SERVICE_CHAT_AGENT, attributeKeys: ["identity.agent_client_id"] },
   },
   {
     id: "e-delegate",
@@ -163,7 +178,11 @@ export const STORY_EDGES: Array<{
     targetHandle: "left",
     label: "4. A2A delegate — forwards the delegated token",
     detail: "Real A2A protocol (Agent Cards, task-based JSON-RPC) — not an in-process call.",
-    meta: { spanName: "agent.a2a_delegate", attributeKeys: ["oauth.scope", "a2a.result", "a2a.task_state"] },
+    meta: {
+      spanName: "agent.a2a_delegate",
+      service: SERVICE_CHAT_AGENT,
+      attributeKeys: ["oauth.scope", "a2a.result", "a2a.task_state"],
+    },
   },
   {
     id: "e-verify-task",
@@ -173,7 +192,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "right",
     label: "Inbound auth — independently re-verifies the SAME token",
     detail: "task-agent/app/agent_executor.py — no implicit trust in the Chat Agent's say-so.",
-    meta: {},
+    meta: { spanName: "inbound_auth.verify", service: SERVICE_TASK_AGENT, attributeKeys: ["identity.agent_client_id"] },
   },
   {
     id: "e-mcp",
@@ -214,7 +233,11 @@ export const STORY_EDGES: Array<{
     label: "Evaluator — proposed answer",
     detail:
       "task_assistant's candidate answer, checked against delegated_request (what the Chat Agent actually asked for, not the human's literal words) via a structured JudgeVerdict.",
-    meta: {},
+    meta: {
+      spanName: "judge.evaluate",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["judge.attempt", "judge.status"],
+    },
   },
   {
     id: "e-judge-retry",
@@ -225,7 +248,11 @@ export const STORY_EDGES: Array<{
     label: "Optimizer — retry with feedback",
     detail:
       "Only on status=\"fail\": judge's reason + missing_info loop back into task_assistant. Capped at judge_max_attempts, then gives up and returns the last answer as-is (fail-open — unlike every auth check here, a broken or unsatisfied judge never blocks a real answer).",
-    meta: {},
+    meta: {
+      spanName: "judge.evaluate",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["judge.status", "judge.reason"],
+    },
   },
 ]
 
@@ -280,12 +307,16 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
   ],
 }
 
-/** Most recent span matching one of `names`, or null. Spans arrive newest-last
- * from the API (see TelemetryPanel), so scan from the end. */
-export function latestSpan(spans: TelemetrySpan[], names: string[]): TelemetrySpan | null {
+/** Most recent span matching one of `names` (and `service`, when given — see
+ * SERVICE_CHAT_AGENT/SERVICE_TASK_AGENT; required once two services can
+ * emit spans with the same name, e.g. "inbound_auth.verify"), or null.
+ * Spans arrive newest-last from TelemetryPanel's merged array, so scan
+ * from the end. */
+export function latestSpan(spans: TelemetrySpan[], names: string[], service?: string): TelemetrySpan | null {
   if (names.length === 0) return null
   for (let i = spans.length - 1; i >= 0; i--) {
-    if (names.includes(spans[i].name)) return spans[i]
+    const span = spans[i]
+    if (names.includes(span.name) && (!service || span.service === service)) return span
   }
   return null
 }

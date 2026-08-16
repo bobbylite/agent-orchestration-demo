@@ -11,18 +11,24 @@ const ArchitectureDiagram = lazy(() =>
 const POLL_INTERVAL_MS = 2000
 
 export function TelemetryPanel() {
+  // Oldest-first / newest-last — matches diagram/flowConfig.ts's latestSpan(),
+  // which scans from the end to find the most recent match. Reversed only at
+  // render time below, for the panel's own newest-first card list.
   const [spans, setSpans] = useState<TelemetrySpan[]>([])
   const [diagramOpen, setDiagramOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     async function poll() {
-      try {
-        const { spans: latest } = await api.getTelemetry()
-        if (!cancelled) setSpans(latest.slice().reverse())
-      } catch {
-        // telemetry is best-effort; a failed poll just tries again next tick
-      }
+      // Two independent processes (backend + task-agent), each best-effort:
+      // task-agent may not be running in every demo, so a failure fetching
+      // its spans shouldn't blank out the Chat Agent's. Merge by start_time
+      // rather than concatenating — polls land at different times and each
+      // endpoint's own ring buffer is only locally ordered.
+      const results = await Promise.allSettled([api.getTelemetry(), api.getTaskAgentTelemetry()])
+      const merged = results.flatMap((r) => (r.status === "fulfilled" ? r.value.spans : []))
+      merged.sort((a, b) => a.start_time - b.start_time)
+      if (!cancelled) setSpans(merged)
     }
     poll()
     const id = setInterval(poll, POLL_INTERVAL_MS)
@@ -66,35 +72,38 @@ export function TelemetryPanel() {
           </div>
         ) : (
           <ul className="flex flex-col gap-3">
-            {spans.map((span) => (
-              <li
-                key={span.span_id}
-                className="animate-pop-in rounded-xl border border-border bg-canvas-raised p-3.5 text-xs shadow-card"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[13px] font-semibold text-ink">{span.name}</span>
-                  <StatusBadge status={span.status} />
-                </div>
-                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-muted">
-                  {span.parent_span_id && (
-                    <span className="rounded bg-code-bg px-1.5 py-0.5 font-mono" title="has parent span">
-                      ↳ nested
-                    </span>
+            {spans
+              .slice()
+              .reverse()
+              .map((span) => (
+                <li
+                  key={span.span_id}
+                  className="animate-pop-in rounded-xl border border-border bg-canvas-raised p-3.5 text-xs shadow-card"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[13px] font-semibold text-ink">{span.name}</span>
+                    <StatusBadge status={span.status} />
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-2 text-[11px] text-ink-muted">
+                    {span.parent_span_id && (
+                      <span className="rounded bg-code-bg px-1.5 py-0.5 font-mono" title="has parent span">
+                        ↳ nested
+                      </span>
+                    )}
+                    {span.duration_ms != null && <span className="font-mono">{span.duration_ms.toFixed(1)}ms</span>}
+                  </div>
+                  {Object.keys(span.attributes).length > 0 && (
+                    <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border pt-2.5 font-mono text-[11px]">
+                      {Object.entries(span.attributes).map(([key, value]) => (
+                        <div key={key} className="contents">
+                          <dt className="whitespace-nowrap text-ink-muted">{key}</dt>
+                          <dd className="min-w-0 break-all text-ink">{String(value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   )}
-                  {span.duration_ms != null && <span className="font-mono">{span.duration_ms.toFixed(1)}ms</span>}
-                </div>
-                {Object.keys(span.attributes).length > 0 && (
-                  <dl className="mt-2.5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-t border-border pt-2.5 font-mono text-[11px]">
-                    {Object.entries(span.attributes).map(([key, value]) => (
-                      <div key={key} className="contents">
-                        <dt className="whitespace-nowrap text-ink-muted">{key}</dt>
-                        <dd className="min-w-0 break-all text-ink">{String(value)}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                )}
-              </li>
-            ))}
+                </li>
+              ))}
           </ul>
         )}
       </div>

@@ -1,10 +1,15 @@
-"""OpenTelemetry setup: a local, in-memory ring buffer of spans that the
-frontend's TelemetryPanel polls, with defensive redaction so nothing shaped
-like a credential is ever recorded — regardless of what a caller passes in.
+"""OpenTelemetry setup for the Task Agent — same shape as backend/app/telemetry.py
+(in-memory ring buffer + redaction, polled by the frontend's Telemetry
+panel / architecture diagram), deliberately not shared via
+agentorchestration_shared: each service keeps its own independently
+auditable copy rather than a shared telemetry package, same reasoning as
+app/token_grants.py's duplication of backend/app/auth/agent_auth.py.
 
-No OTLP exporter is configured by default; spans stay local. Set
-OTEL_EXPORTER_OTLP_ENDPOINT (and add a BatchSpanProcessor/OTLPSpanExporter
-below) to ship spans to a real collector later.
+This is the "cross-service telemetry aggregation" piece CLAUDE.md's "Not
+yet built" section flagged — task-agent previously had no OTel wiring at
+all and only logged the judge's verdicts via `logging`. Kept intentionally
+minimal: a local ring buffer + a `/telemetry` endpoint, no OTLP exporter,
+same as the Chat Agent's.
 """
 
 from __future__ import annotations
@@ -43,11 +48,11 @@ class RecordingSpanProcessor(SpanProcessor):
             {
                 "name": span.name,
                 # Disambiguates spans that share a name across services
-                # (e.g. "inbound_auth.verify" is emitted by both this
-                # service and task-agent/app/telemetry.py) once the
-                # frontend merges both services' spans into one array for
-                # the architecture diagram — see frontend/src/components/
-                # diagram/flowConfig.ts's SERVICE_* constants.
+                # (e.g. this service and backend/ both emit
+                # "inbound_auth.verify") once the frontend merges both
+                # services' spans into one array for the architecture
+                # diagram — see frontend/src/components/diagram/
+                # flowConfig.ts's SERVICE_* constants.
                 "service": (span.resource.attributes or {}).get("service.name", ""),
                 "trace_id": format(span.context.trace_id, "032x"),
                 "span_id": format(span.context.span_id, "016x"),
@@ -74,7 +79,7 @@ def init_telemetry() -> None:
     global _tracer_provider
     if _tracer_provider is not None:
         return
-    resource = Resource.create({"service.name": "agentorchestration-console-backend"})
+    resource = Resource.create({"service.name": "agentorchestration-console-task-agent"})
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(RecordingSpanProcessor())
     provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
@@ -86,7 +91,7 @@ def get_recent_spans() -> list[dict[str, Any]]:
     return list(_recent_spans)
 
 
-_tracer = trace.get_tracer("agentorchestration.console")
+_tracer = trace.get_tracer("agentorchestration.taskagent")
 
 
 @contextmanager

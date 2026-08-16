@@ -99,7 +99,7 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
   const edges: Edge[] = useMemo(
     () =>
       STORY_EDGES.map((e) => {
-        const match = e.meta.spanName ? latestSpan(spans, [e.meta.spanName]) : null
+        const match = e.meta.spanName ? latestSpan(spans, [e.meta.spanName], e.meta.service) : null
         const active = isRecent(match)
         return {
           id: e.id,

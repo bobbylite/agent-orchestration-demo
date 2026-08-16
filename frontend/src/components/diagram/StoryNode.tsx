@@ -32,7 +32,7 @@ export function StoryNode({ id, data, spans }: Props) {
   const style = KIND_STYLES[data.kind]
   const handles = NODE_HANDLES[id] ?? []
   const instrumented = data.spanNames.length > 0
-  const match = instrumented ? latestSpan(spans, data.spanNames) : null
+  const match = instrumented ? latestSpan(spans, data.spanNames, data.service) : null
   const active = isRecent(match)
 
   return (

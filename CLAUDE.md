@@ -149,6 +149,13 @@ this code:
   only mounts (and animates in via `.animate-pop-in`) genuinely new spans on
   each 2s poll — don't break that keying, it's what makes the panel not
   flicker.
+- `task-agent/app/telemetry.py` is a second, independently-duplicated copy
+  of this same shape (own ring buffer, own `/telemetry` endpoint) — see
+  "Telemetry for the Task Agent" below. Every span dict from either copy
+  now carries a `service` field so the frontend can tell the two apart
+  when a span *name* recurs across services (e.g. `inbound_auth.verify`).
+  If you add a third instrumented service, give it the same `service`
+  stamp — don't assume span names are globally unique.
 
 ## LangGraph + real A2A: two graphs, two processes (built 2026-08-15)
 
@@ -342,11 +349,13 @@ text. Two chained-exchange tokens inspected directly:
 
 ### Not yet built
 
-- Cross-service telemetry aggregation — `task-agent/` has no
-  `RecordingSpanProcessor`/`/telemetry` endpoint of its own yet; its
-  activity isn't visible in the frontend's Telemetry panel, only via its
-  own console/logs. The Chat Agent's `agent.a2a_delegate` span *does* show
-  the delegation round-trip in the existing panel.
+- Cross-service telemetry for `mcp-todos-server/` and the MCP-scoped
+  token-exchange internals (steps 3/4 of the RFC 8693 chain) — those still
+  only show up via task-agent's own console/logs. `task-agent/` itself
+  *does* now have a `RecordingSpanProcessor`/`/telemetry` endpoint (see
+  "Telemetry for the Task Agent" below, added 2026-08-16) — its A2A task
+  execution, inbound auth, and judge verdicts are live in the frontend's
+  Telemetry panel and diagram, same as the Chat Agent's.
 - An interactive step-up consent loop: if the Task Agent's own
   `todos:write` exchange fails because the underlying authorization
   genuinely doesn't cover it, the model explains this in prose, but
@@ -439,6 +448,107 @@ console.groq.com>`. If `GROQ_API_KEY` is empty or invalid while
 `JUDGE_PROVIDER=groq`, the judge call fails and the fail-open behavior
 above kicks in (`status="pass"`) — the task still returns an answer, just
 without a real judge pass, rather than crashing the task.
+
+## Telemetry for the Task Agent (added 2026-08-16)
+
+`task-agent/app/telemetry.py` is a copy of `backend/app/telemetry.py`'s
+shape (`RecordingSpanProcessor` ring buffer, the same `token|secret|
+password|authoriz` redaction filter, `with_span()`), deliberately
+duplicated rather than shared — same reasoning as `token_grants.py`: each
+service's telemetry stays independently auditable. `app/main.py` calls
+`init_telemetry()` in its lifespan and exposes `GET /telemetry` (no `/api`
+prefix — task-agent's other routes are the A2A JSON-RPC endpoint at
+exactly `/`, a distinct path, so there's no route-mount collision to
+worry about the way `mcp-todos-server/app/main.py` has to for `/mcp`).
+
+**`a2a-sdk` auto-instruments itself onto any registered `TracerProvider`
+— must be explicitly disabled, or the panel fills with EventQueue noise.**
+`a2a/utils/telemetry.py`'s `@trace_class`/`@trace_function` decorators
+(applied to `EventQueue`, `DefaultRequestHandler`, both the JSON-RPC
+server dispatcher *and* the A2A client transport backend/ uses to call
+this service) read `OTEL_INSTRUMENTATION_A2A_SDK_ENABLED` **once, at
+import time** and default to *enabled* whenever any real `TracerProvider`
+is registered — before this app called `init_telemetry()`, that
+auto-instrumentation was silently inert (no-op tracer). Both
+`task-agent/app/main.py` and `backend/app/main.py` now set
+`os.environ.setdefault("OTEL_INSTRUMENTATION_A2A_SDK_ENABLED", "false")`
+as the literal first lines of the file, before the `a2a.*` imports below
+them — it has to run before a2a's own `telemetry` submodule is imported
+for the first time anywhere in the process (including transitively, e.g.
+via `app.agent.graph` → `app.agent.tools` on the backend side), or the
+env var check has already happened and setting it later does nothing.
+This is unrelated to our own spans (`inbound_auth.verify`,
+`a2a.task_execute`, `judge.evaluate`, `agent.invoke`,
+`agent.a2a_delegate`, …) — those use this app's own `with_span()`/tracer,
+not a2a-sdk's, and are unaffected either way.
+
+**Three spans, one nested under another**: `inbound_auth.verify`
+(`agent_executor.py`, its own top-level span — same "the gate happens
+before the graph runs" reasoning as the Chat Agent's) and `a2a.task_execute`
+(also `agent_executor.py`, wraps the whole graph invocation) are siblings;
+`judge.evaluate` (`graph.py`, one instance per judge attempt) nests under
+`a2a.task_execute` via OTel's ambient context, so a trace shows the full
+propose → evaluate → retry loop as one tree, not three unrelated spans.
+
+**`judge.evaluate`'s attributes are deliberately ordered `judge.attempt`
+then `judge.status` first**, before `judge.reason`/`judge.provider`/
+`judge.missing_info_count` — `StoryNode.tsx` (frontend diagram) only
+previews a matched span's first 3 attributes, and pass/fail is the one
+thing this instrumentation exists to surface there. `judge.status="fail"`
+is a normal business outcome, not a span execution failure, so the span's
+OTel status stays `OK` even on a fail verdict — a red/`ERROR` span in this
+panel means the judge *call itself* broke (the fail-open except branch),
+never that it did its job and said no.
+
+**Cross-service span-name collisions, solved via a `service` field, not
+by renaming spans.** Both this service and the Chat Agent emit a span
+literally named `inbound_auth.verify` (same phase, different process) —
+once the frontend merges both services' spans into one array (see below),
+matching by name alone would attribute either service's auth check to
+either node. `RecordingSpanProcessor.on_end()` (both copies) now stamps
+every emitted span dict with `"service": span.resource.attributes.get("service.name")`
+— `"agentorchestration-console-backend"` or
+`"agentorchestration-console-task-agent"` — and
+`frontend/src/components/diagram/flowConfig.ts` exports these as
+`SERVICE_CHAT_AGENT`/`SERVICE_TASK_AGENT`. `latestSpan(spans, names, service?)`
+filters on both; every `StoryNodeData`/`StoryEdgeMeta` entry with a
+`spanNames`/`spanName` now also carries the matching `service`. Any
+future service that reuses a span name (e.g. `mcp-todos-server` adding
+its own `inbound_auth.verify` per the shared `verify_bearer_token()`
+pattern) must do the same.
+
+**Frontend fetches task-agent's spans directly, not via the Chat Agent.**
+`frontend/vite.config.ts` proxies `/task-agent-api/*` → `http://localhost:9010/*`
+(same "same-origin in dev" reasoning as the existing `/api` → backend
+proxy — no CORS middleware needed on task-agent). `TelemetryPanel.tsx`
+polls both `api.getTelemetry()` (backend) and `api.getTaskAgentTelemetry()`
+(task-agent) every tick via `Promise.allSettled`, so task-agent being down
+degrades to "just the Chat Agent's spans," not a broken panel. The merged
+array is sorted by `start_time` — the two ring buffers are each only
+locally chronological, so concatenating without sorting would interleave
+them wrong.
+
+**Bug fixed in passing: `latestSpan()`'s input ordering.** Before this
+change, `TelemetryPanel` reversed the API's spans to newest-first for its
+own card list, then passed that *same reversed array* into
+`ArchitectureDiagram` — but `latestSpan()` scans from the end assuming
+newest-*last* input (matching the raw, un-reversed API order its docstring
+describes). With a single service and mostly-unique span names per demo
+session this rarely surfaced, but it meant "most recent matching span"
+was actually returning the *oldest* match once a span name recurred (e.g.
+a second `inbound_auth.verify` later in the same session) — the edge/node
+would key off a stale match and could stop updating. Fixed by keeping the
+`spans` state itself in raw (oldest-first) order and reversing only at
+render time for the panel's own list (`spans.slice().reverse().map(...)`).
+
+**The `e-verify-task` edge (Task Agent → PingOne, "independently
+re-verifies the SAME token") is now genuinely live** — it previously had
+`meta: {}` (nothing instrumented) since task-agent had no spans at all.
+Same for the new `judge`/`e-judge-propose`/`e-judge-retry` diagram
+elements added alongside the evaluator-optimizer pattern (see "Judge node
+in the Task Agent's graph" above) — those now key off the real
+`judge.evaluate` span instead of always rendering dashed/"not aggregated
+here."
 
 ## MCP server: its own UI, PingOne SSO, and an OBO audit log (2026-08-15)
 
@@ -582,6 +692,15 @@ has these settings at all).
 
 ## Known gotchas (all previously hit — don't re-debug these)
 
+- **`a2a-sdk` self-instruments onto any registered OTel `TracerProvider`**
+  — `EventQueue`/request-handler/client-transport methods start emitting
+  spans the moment `init_telemetry()` registers a real provider, flooding
+  the Telemetry panel with plumbing noise unrelated to this app's own
+  spans. Fixed via `os.environ.setdefault("OTEL_INSTRUMENTATION_A2A_SDK_ENABLED",
+  "false")` as the literal first lines of both `backend/app/main.py` and
+  `task-agent/app/main.py` — must run before the first `a2a.*` import
+  anywhere in the process, since a2a-sdk reads the env var once at that
+  submodule's import time. See "Telemetry for the Task Agent" above.
 - **`uv run` must be invoked from `backend/`**, not the repo root — it
   resolves against `backend/pyproject.toml`; wrong cwd fails with
   `Failed to spawn: uvicorn`.

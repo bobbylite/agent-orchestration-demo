@@ -16,6 +16,11 @@ const KIND_STYLES: Record<StoryNodeData["kind"], { accent: string; icon: ReactEl
   agent: { accent: "var(--brand)", icon: <SparkIcon /> },
   specialist: { accent: "var(--success)", icon: <WrenchIcon /> },
   data: { accent: "var(--warning)", icon: <DbIcon /> },
+  // A blend of the agent and specialist accents — the judge lives inside
+  // task-agent's own process (no separate identity, no PingOne hop of its
+  // own; see the e-judge-propose/e-judge-retry edges) so it's visually
+  // "between" those two kinds rather than a fresh color.
+  judge: { accent: "color-mix(in srgb, var(--brand) 55%, var(--success) 45%)", icon: <ScaleIcon /> },
 }
 
 interface Props extends NodeProps {
@@ -130,6 +135,17 @@ function WrenchIcon() {
         strokeWidth="1.2"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+function ScaleIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 2v11.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M4.5 3.5h7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M5.5 13.5h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M2 6.2 4.5 3.5 7 6.2c0 1.4-1.1 2.3-2.5 2.3S2 7.6 2 6.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+      <path d="M9 6.2 11.5 3.5 14 6.2c0 1.4-1.1 2.3-2.5 2.3S9 7.6 9 6.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
     </svg>
   )
 }

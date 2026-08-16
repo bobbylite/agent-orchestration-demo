@@ -1,6 +1,6 @@
 import type { TelemetrySpan } from "../../lib/api"
 
-export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data"
+export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge"
 
 export interface StoryNodeData {
   [key: string]: unknown
@@ -87,6 +87,19 @@ export const STORY_NODES: Array<{
       title: "OBO Audit Log",
       subtitle: "mcp-todos-server/app/audit.py",
       kind: "data",
+      spanNames: [],
+    },
+  },
+  {
+    id: "judge",
+    position: { x: 860, y: 540 },
+    data: {
+      title: "Judge",
+      // Provider is swappable per task-agent/.env's JUDGE_PROVIDER — Claude
+      // (default) or Groq's free tier — since the judge only evaluates text
+      // it already produced, no delegation token, no identity of its own.
+      subtitle: "Evaluator-optimizer loop — Claude or Groq",
+      kind: "judge",
       spanNames: [],
     },
   },
@@ -192,6 +205,28 @@ export const STORY_EDGES: Array<{
     detail: '"OBO — Agent {name} used {tool} on behalf of {human}" — attributed to the real human, not just the agent.',
     meta: {},
   },
+  {
+    id: "e-judge-propose",
+    source: "taskagent",
+    target: "judge",
+    sourceHandle: "bottom",
+    targetHandle: "top",
+    label: "Evaluator — proposed answer",
+    detail:
+      "task_assistant's candidate answer, checked against delegated_request (what the Chat Agent actually asked for, not the human's literal words) via a structured JudgeVerdict.",
+    meta: {},
+  },
+  {
+    id: "e-judge-retry",
+    source: "judge",
+    target: "taskagent",
+    sourceHandle: "top2",
+    targetHandle: "bottom2",
+    label: "Optimizer — retry with feedback",
+    detail:
+      "Only on status=\"fail\": judge's reason + missing_info loop back into task_assistant. Capped at judge_max_attempts, then gives up and returns the last answer as-is (fail-open — unlike every auth check here, a broken or unsatisfied judge never blocks a real answer).",
+    meta: {},
+  },
 ]
 
 export interface HandleSpec {
@@ -230,6 +265,8 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     { id: "left", type: "target", position: "left", offset: "50%" },
     { id: "top", type: "source", position: "top", offset: "50%" },
     { id: "right", type: "source", position: "right", offset: "50%" },
+    { id: "bottom", type: "source", position: "bottom", offset: "30%" },
+    { id: "bottom2", type: "target", position: "bottom", offset: "70%" },
   ],
   mcp: [
     { id: "left", type: "target", position: "left", offset: "50%" },
@@ -237,6 +274,10 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     { id: "bottom", type: "source", position: "bottom", offset: "50%" },
   ],
   audit: [{ id: "top", type: "target", position: "top", offset: "50%" }],
+  judge: [
+    { id: "top", type: "target", position: "top", offset: "30%" },
+    { id: "top2", type: "source", position: "top", offset: "70%" },
+  ],
 }
 
 /** Most recent span matching one of `names`, or null. Spans arrive newest-last

@@ -97,6 +97,8 @@ task-agent/                  Specialist Agent — separate process, own A2A serv
                               OpenTelemetry, own evaluator-optimizer judge node
 mcp-todos-server/            MCP server (mocked todos tool) + its own PingOne-gated UI's API + OBO audit log
 mcp-todos-server/frontend/   React 19 + Vite 8 + Tailwind v4 — todo list (human/agent tagged) + audit log
+claude-bridge/               Local stdio MCP server — makes Claude Desktop itself the
+                              orchestrating agent, same identity backend/ uses (see below)
 shared/                      Inbound-auth verification shared by backend + task-agent + mcp-todos-server
 ```
 
@@ -267,6 +269,54 @@ propagates onto the token task-agent receives (see `CLAUDE.md`'s
 `task-agent/.env` and `mcp-todos-server/.env`'s `TODOS_READ_SCOPE`/
 `TODOS_WRITE_SCOPE` must match each other exactly (`backend/.env` doesn't
 have these settings at all anymore).
+
+## Claude Desktop as the orchestrator (optional)
+
+`claude-bridge/` swaps the front door: instead of the React frontend
+talking to `backend/`'s LangGraph `assistant` node, **Claude Desktop's own
+model decides when to delegate to the Task Agent** — while presenting the
+exact same PingOne identity (apps #2/#3) `backend/` already has. Nothing
+downstream needs to know or care: the Task Agent's inbound auth, its own
+further RFC 8693 exchange, and `mcp-todos-server`'s policy ACL and OBO
+audit log all stay exactly as they are.
+
+**Setup:**
+
+1. Add a second redirect URI to PingOne **app #1** (alongside
+   `http://localhost:8000/api/auth/callback`): `http://localhost:8765/callback`.
+   `claude-bridge/` does its own one-time browser sign-in (Authorization
+   Code + PKCE with a loopback redirect — the same pattern `gh auth
+   login`/`ant auth login` use), since it's a local process with no
+   browser cookie jar to share with `backend/`'s session.
+2. `cd claude-bridge && cp .env.example .env` — fill in the same values
+   as `backend/.env`'s `OIDC_*`/`AGENT_*`/`AGENT_DELEGATION_*` (it's
+   genuinely the same identity), plus `TASK_AGENT_URL`.
+3. Add to Claude Desktop's config
+   (macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`;
+   Windows: `%APPDATA%\Claude\claude_desktop_config.json`):
+
+   ```json
+   {
+     "mcpServers": {
+       "task-agent-bridge": {
+         "command": "uv",
+         "args": ["run", "--directory", "/absolute/path/to/claude-bridge", "python", "-m", "app.server"]
+       }
+     }
+   }
+   ```
+
+4. Restart Claude Desktop and ask it something todo-related. The first
+   call opens a browser for PingOne sign-in; after that, the delegation
+   credential is cached in memory until it expires — no more browser
+   prompts until you restart the server (Claude Desktop respawns it, so
+   that means restarting Claude Desktop, or reloading the connector).
+
+The Task Agent still requires `task-agent/` (and `mcp-todos-server/`)
+running — this only replaces `backend/`'s and `frontend/`'s role, not the
+rest of the chain. See `CLAUDE.md`'s "Claude Desktop as the orchestrator"
+for the full design writeup, including why this is a local stdio server
+rather than a remote HTTP connector.
 
 ## Docker
 

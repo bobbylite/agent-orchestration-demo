@@ -819,6 +819,127 @@ has these settings at all).
   hangs/fails. `get_http_request()` (from `fastmcp.server.dependencies`)
   is how an `@mcp.tool` function reads the raw `Authorization` header
   without needing an explicit `ctx: Context` parameter.
+- **`[project.scripts]` entry points don't get installed when
+  `[tool.uv].package = false`** (every service in this repo sets that,
+  including `claude-bridge/`) — there's no build/install step to place the
+  shim, so `uv run claude-bridge` silently fails to resolve. Launch via
+  `uv run --directory claude-bridge python -m app.server` instead
+  (confirmed by installing it and finding `.venv/bin/` empty).
+
+## Claude Desktop as the orchestrator (added 2026-08-16)
+
+`claude-bridge/` is a genuinely different way to run this app's chat
+experience: instead of the React frontend talking to `backend/`'s
+LangGraph `assistant` node, **Claude Desktop's own model becomes the
+orchestrator** — deciding when a request needs the Task Agent and
+delegating to it — while presenting the *exact same* PingOne identity
+`backend/` already has (apps #2/#3). Everything downstream of that
+identity (the Task Agent's inbound auth, its own further RFC 8693
+exchange, `mcp-todos-server`'s policy ACL and OBO audit log) is completely
+unaware anything changed at the front door — this is the whole point:
+swap the orchestrator, keep the entire security substrate unchanged and
+independently verified exactly as it already is.
+
+**Why a local stdio MCP server, not a remote HTTP connector.** The
+original idea was Claude Desktop connecting straight to
+`mcp-todos-server`'s `/mcp` endpoint as a remote OAuth-protected MCP
+server — rejected mid-design (see the conversation this was built in) for
+two reasons: `mcp-todos-server/app/policy.py`'s ACL and
+`mcp_server.py`'s audit-log path are both built around the assumption
+that every `/mcp` caller went through the RFC 8693 chain and carries an
+`agent_client_id` claim, which a token Claude Desktop obtained via a
+plain OAuth flow never would; and Claude Desktop's exact remote-connector
+OAuth handshake (redirect URI, whether Dynamic Client Registration is
+required) wasn't fully pinned down from available docs. A **local stdio
+server** sidesteps both: Claude Desktop spawns it as a trusted local
+subprocess (no OAuth-with-Desktop-as-client needed at all), and it
+presents the Chat Agent's own identity to the rest of the chain — so nothing
+downstream needed to change to accommodate a new kind of caller.
+
+**How it authenticates — a self-contained Authorization Code + PKCE flow
+with a loopback redirect**, the same pattern CLI tools like `gh auth
+login`/`ant auth login` use: `claude-bridge/app/local_login.py` opens a
+browser, PingOne redirects to `http://localhost:8765/callback` (an
+`http.server.HTTPServer` running in this process, not a real HTTP route
+anywhere), and the whole PKCE state (verifier/state/nonce) lives in local
+variables for the few seconds the flow takes — no cookie-sealing needed
+(`claude-bridge/app/pkce.py` keeps only the stateless PKCE math from
+`backend/app/auth/pkce.py`, not the cookie half) since there's no
+browser-to-process cookie jar to bridge two separate HTTP requests across,
+unlike `backend/`'s `/api/auth/login` + `/api/auth/callback`. This needs
+**one PingOne change**: app #1 needs a second redirect URI added
+alongside `http://localhost:8000/api/auth/callback`:
+`http://localhost:8765/callback` (or whatever `LOCAL_CALLBACK_PORT` is
+set to).
+
+**Then the same two-step chain `backend/app/auth/routes.py`'s
+`/api/auth/agent-token` performs** — Client Credentials (app #2, "I am
+the orchestration agent") + RFC 8693 Token Exchange (app #3, subject =
+the human's own token from the browser flow, scope = generic
+`agent:delegation`, audience = the Task Agent) — duplicated into
+`claude-bridge/app/agent_auth.py` (same shape as
+`task-agent/app/token_grants.py`'s duplication, not shared) and
+orchestrated with caching by `claude-bridge/app/credentials.py`'s
+`CredentialManager`: the delegation credential (cheap, short-lived) is
+re-derived often; the underlying browser sign-in (expensive, needs a
+human to click through PingOne) is cached until it actually expires. No
+disk persistence — a fresh Claude-Desktop-spawned process means a fresh
+browser prompt, deliberately: this is a demo bridge, not a credential
+store.
+
+**The A2A call itself** (`claude-bridge/app/delegate.py`) is the same
+protocol call `backend/app/agent/tools.py`'s `_delegate()` makes — Agent
+Cards + task-based JSON-RPC — with the LangChain `@tool`/`RunnableConfig`
+wrapper and the `NEEDS_AGENT_AUTH_MARKER` sentinel removed (this bridge
+always has a credential by the time it calls the Task Agent; there's no
+separate "session vs. delegation" UI moment to signal, the browser prompt
+already covered that). Exposes the same two tools
+(`ask_task_agent_read`/`ask_task_agent_write`) with the same docstrings,
+so Claude Desktop's own tool-choice reasoning shapes the delegated request
+text exactly the way the Chat Agent's LangGraph loop already does.
+
+**No OpenTelemetry for this component** — it's a short-lived local
+subprocess with no HTTP port for the frontend's Telemetry panel to poll,
+so `claude-bridge/app/server.py` narrates via `logging` to stderr instead
+(what Claude Desktop's own MCP log viewer shows), same reasoning
+task-agent's judge used before it got real spans, except here there's no
+long-running server process to eventually add spans to.
+
+**Running it**: add to Claude Desktop's config
+(`~/Library/Application Support/Claude/claude_desktop_config.json` on
+macOS; `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "task-agent-bridge": {
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/claude-bridge", "python", "-m", "app.server"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop, ask it something todo-related — the first call
+pops a browser for PingOne sign-in, everything after that is cached until
+it expires.
+
+**A connected server doesn't guarantee Claude reaches for it.** Confirmed
+live 2026-08-16: `~/Library/Logs/Claude/mcp-server-task-agent-bridge.log`
+showed a fully healthy connection (`initialize`/`tools/list` both
+succeeded, both tools returned) with **zero `tools/call` entries** — the
+model just never tried. Two separate gates can cause this, and only one
+is a triggering problem a skill can fix: (1) Claude Desktop's per-chat
+tools toggle being off for this connector (a skill can't fix this — check
+the tools icon in the message composer first), and (2) genuine
+under-triggering, where the tool is available but the model doesn't map
+the phrasing to it. `claude-bridge/skill/SKILL.md` addresses (2) — a
+Claude Desktop Agent Skill (same SKILL.md format as this repo's own
+`.claude/skills/`) with explicit broad-phrasing trigger guidance, the
+real todo data shape (text + done only — **no** due date/priority/tags/
+delete, so the model doesn't invent or promise unsupported fields), and a
+note on why narrating the delegation is in-character for this demo. Add
+it via Claude Desktop's Skills settings, pointed at that folder.
 
 ## Skills
 

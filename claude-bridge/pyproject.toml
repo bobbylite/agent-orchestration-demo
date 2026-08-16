@@ -1,0 +1,15 @@
+[project]
+name = "claude-bridge"
+version = "0.1.0"
+description = "Local stdio MCP server — lets Claude Desktop itself be the orchestrating agent, delegating to the Task Agent over the same RFC 8693 chain the Chat Agent uses"
+requires-python = ">=3.14"
+dependencies = [
+    "fastmcp>=3.4",
+    "httpx>=0.27",
+    "joserfc>=1.0",
+    "a2a-sdk>=1.1.0",
+    "pydantic-settings>=2.5",
+]
+
+[tool.uv]
+package = false

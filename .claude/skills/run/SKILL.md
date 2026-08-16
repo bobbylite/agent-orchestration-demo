@@ -22,10 +22,13 @@ uv run uvicorn app.main:app --reload --port 8000
   `backend/pyproject.toml` — running from the repo root fails with
   `error: Failed to spawn: uvicorn / Caused by: No such file or directory`.
 - Requires `backend/.env` (copy from `backend/.env.example`) for PingOne
-  sign-in and any agent action approval to work. Without it, `/api/config`
-  reports `oidc_enabled`/`agent_enabled` as `false` and the sign-in button
-  shows a "not configured" hint — expected degraded mode, not a bug. Plain
-  chat needs only sign-in; approval prompts only appear once you ask for
+  sign-in and any agent action approval to work. `agent_enabled` needs
+  **two** worker-app credential pairs now (`AGENT_CLIENT_ID`/`SECRET` and
+  `AGENT_DELEGATION_CLIENT_ID`/`SECRET` — see `CLAUDE.md` "RFC 8693
+  chained delegation"), not one. Without them, `/api/config` reports
+  `oidc_enabled`/`agent_enabled` as `false` and the sign-in button shows a
+  "not configured" hint — expected degraded mode, not a bug. Plain chat
+  needs only sign-in; approval prompts only appear once you ask for
   something that needs delegation (see "Verify the full stack" below).
 - Verify: `curl http://localhost:8000/api/health` → `{"status":"ok"}`.
 
@@ -92,17 +95,20 @@ uv run uvicorn app.main:app --port 9010
 ```
 
 - Requires `task-agent/.env` (copy from `.env.example`). Its
-  `OIDC_DISCOVERY_URL`/`AGENT_EXPECTED_AUDIENCE` **must match
-  `backend/.env`'s values exactly** — it independently re-verifies the same
-  delegated token the Chat Agent forwards, see `CLAUDE.md` "Identity
-  propagation". A mismatch fails with a genuinely correct
-  `audience_mismatch`, not a bug.
+  `OIDC_DISCOVERY_URL` must match `backend/.env`'s exactly (same PingOne
+  tenant) — but **`AGENT_EXPECTED_AUDIENCE` must be task-agent's own URL**
+  (`http://localhost:9010`), not the same value as `backend/.env`'s. Since
+  the 2026-08-16 redesign, task-agent also needs its own PingOne worker-app
+  identity (`TASK_AGENT_CLIENT_ID`/`SECRET`) and its own Token Exchange app
+  (`TODOS_MCP_CLIENT_ID`/`SECRET`) — see `CLAUDE.md` "RFC 8693 chained
+  delegation" and `.env.example` for the full set. A mismatch anywhere
+  fails with a genuinely correct `audience_mismatch`/`invalid_scope`, not
+  a bug.
 - Needs `mcp-todos-server` reachable by the time a task actually runs, not
-  necessarily at its own startup — it no longer fetches MCP tools once at
-  boot; it rebuilds its MCP connection fresh on every task, forwarding
-  that request's verified bearer token as an `Authorization` header so
-  `mcp-todos-server` can independently verify it too and attribute the
-  call to the real human (OBO).
+  necessarily at its own startup — it fetches MCP tool *schemas* once per
+  task (no auth needed for that), then builds a freshly-authorized MCP
+  connection per tool call, using a token from its *own* RFC 8693 exchange
+  — not one forwarded from the Chat Agent.
 - Verify: `curl http://localhost:9010/.well-known/agent-card.json` returns
   the Task Agent's AgentCard JSON.
 
@@ -113,12 +119,14 @@ uv run uvicorn app.main:app --port 9010
    the "not configured" hint) if `.env` is populated.
 3. `curl http://localhost:5173/api/config` → confirms the proxy is wired.
 4. With all four core services up: sign in, ask "what's on my todo list?"
-   — this should prompt an inline "Approve Agent Action" for `todos:read`;
-   approve it and the answer should reflect real MCP data (seeded: "Buy
-   milk", "Renew passport"), with the Telemetry panel showing an
-   `agent.a2a_delegate` span. Then ask it to complete one — this prompts
-   *again*, for `todos:write` specifically; approving read earlier doesn't
-   cover it.
+   — this should prompt a single, generic inline "Approve Agent Action"
+   (not scoped to read/write anymore — that decision moved to the Task
+   Agent); approve it and the answer should reflect real MCP data (seeded:
+   "Buy milk", "Renew passport"), with the Telemetry panel showing an
+   `agent.a2a_delegate` span. Then ask it to complete one — no *second*
+   approval prompt this time (the Chat Agent already has its one
+   delegation credential); the Task Agent requests `todos:write` for
+   itself, freshly, behind the scenes.
 5. With `mcp-todos-server`'s own frontend also up: open
    http://localhost:5174, sign in (its own PingOne app), and confirm the
    todos from step 4 show up tagged "Agent" with the audit log showing

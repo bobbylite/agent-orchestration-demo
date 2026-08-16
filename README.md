@@ -7,25 +7,30 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
 - **Sign in with PingOne** — OIDC Authorization Code + PKCE (S256), ID token
   verified against PingOne's JWKS, session sealed into an encrypted
   (JWE/A256GCM) `HttpOnly` cookie. Sufficient on its own for plain chat.
-- **Approve Agent Action, per action, not once** — the agent proves its own
-  identity via OAuth Client Credentials, then combines that with the user's
-  session token via [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
-  into a delegated token — but scoped to exactly one capability at a time
-  (`todos:read` or `todos:write`), requested the first time it's actually
-  needed. Approving read access never grants write access; asking the agent
-  to change something after only approving reading prompts again, for write
-  specifically.
-- **Inbound auth (AgentCore-style), scoped to where it matters** — plain
-  chat only needs the signed-in session (it never touches a protected
-  resource). The moment the agent needs to act *on the user's behalf* — via
-  A2A delegation to the Task Agent — it needs a delegated token scoped for
-  that specific action, re-verified fresh (signature against PingOne's
-  JWKS, issuer, expiry, audience, **and scope**) rather than trusted from a
-  session, mirroring AWS Bedrock AgentCore's inbound-auth model at that
-  boundary. If you ask for something that needs a scope you haven't
-  approved yet, the chat explains it and offers an inline "Approve Agent
-  Action" prompt right there, scoped to that one action, then automatically
-  retries.
+- **Chained RFC 8693 delegation — four exchanges, not one pass-through
+  token** — the Chat Agent proves its own identity (OAuth Client
+  Credentials) then combines that with the user's session token via
+  [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693) into a
+  *generic* delegation credential addressed to the Task Agent — it never
+  requests `todos:read`/`todos:write` itself. The Task Agent, in turn,
+  proves *its own* identity and performs its *own* Token Exchange —
+  combining the credential it just received with its own identity — scoped
+  to exactly the todos capability the specific tool call needs, freshly,
+  every call. That's what's actually calling the todos MCP server: a
+  credential minted by the service about to use it, not one forwarded
+  unchanged from two hops away. Approving is a single "Approve Agent
+  Action" per chat session; which specific capability gets requested is
+  decided downstream, per action, with nothing cached across different
+  scopes ("step-up" scoping for free).
+- **Inbound auth (AgentCore-style) at every hop** — plain chat only needs
+  the signed-in session (it never touches a protected resource). The
+  moment the agent needs to act *on the user's behalf*, each hop in the
+  delegation chain re-verifies fresh (signature against PingOne's JWKS,
+  issuer, expiry, audience) rather than trusting the previous hop's
+  say-so, mirroring AWS Bedrock AgentCore's inbound-auth model. If you ask
+  for something the agent doesn't yet have a delegation credential for,
+  the chat explains it and offers an inline "Approve Agent Action" prompt,
+  then automatically retries.
 - **OpenTelemetry** — every credential-bearing operation (login, logout,
   agent auth, token exchange, inbound-auth verification, agent invocation)
   emits a span. A redaction filter drops any attribute whose key looks like
@@ -36,17 +41,20 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   and, if so, delegates to a separate **Task Agent** process over the actual
   [A2A protocol](https://a2a-protocol.org) (Agent Cards, task-based
   JSON-RPC, not an in-process function call). The Task Agent independently
-  re-verifies the same delegated token — no implicit trust between
+  re-verifies the credential it receives — no implicit trust between
   services — then reasons about which tool to use against a real
-  [MCP](https://modelcontextprotocol.io) server, gated by its own policy ACL.
+  [MCP](https://modelcontextprotocol.io) server, minting its own further
+  delegated token for that specific call (see "Chained RFC 8693
+  delegation" above), gated by its own policy ACL.
 - **The MCP server has its own PingOne-gated UI and an OBO audit log** —
   `mcp-todos-server/` is no longer a bare, unauthenticated tool server: it
-  independently re-verifies the same delegated token one more hop out (the
-  Task Agent forwards it unchanged), tags every todo with who actually
-  created it (a signed-in human directly, or an agent on a human's behalf),
-  and records every call — allowed or denied — to an in-memory audit log
-  its own UI renders live: *"OBO — Agent Task Agent used add_todo on
-  behalf of robert.luisi@pingidentity.com"*.
+  independently re-verifies the token the Task Agent mints for it (its own
+  RFC 8693 exchange, not a forwarded token — see "Chained RFC 8693
+  delegation" above), tags every todo with who actually created it (a
+  signed-in human directly, or an agent on a human's behalf), and records
+  every call — allowed or denied — to an in-memory audit log its own UI
+  renders live: *"OBO — Agent Task Agent used add_todo on behalf of
+  robert.luisi@pingidentity.com"*.
 - **Secret scanning in CI** — every push and PR runs
   [gitleaks](https://github.com/gitleaks/gitleaks) over the full git
   history (`.github/workflows/gitleaks.yml`), catching any credential that
@@ -94,15 +102,15 @@ answer questions about a todo list; everything else works without them)
 ```bash
 # terminal 3
 cd mcp-todos-server
-cp .env.example .env   # PingOne app #3 (its own UI) + must match backend/.env's
-                        # AGENT_EXPECTED_AUDIENCE / TODOS_READ_SCOPE / TODOS_WRITE_SCOPE
+cp .env.example .env   # PingOne app #4 (its own UI) + own audience
+                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE
 uv sync
 uv run uvicorn app.main:app --port 9000   # MCP endpoint at /mcp, its UI's API at /api/*
 
 # terminal 4
 cd task-agent
-cp .env.example .env   # OIDC_DISCOVERY_URL / AGENT_EXPECTED_AUDIENCE
-                        # must match backend/.env's values exactly
+cp .env.example .env   # OIDC_DISCOVERY_URL must match backend/.env's; everything
+                        # else here is task-agent's OWN identity (PingOne apps #5, #6)
 uv sync
 uv run uvicorn app.main:app --port 9010
 ```
@@ -130,73 +138,106 @@ fail regardless of which order the two were clicked in.
 
 ## PingOne setup
 
-You need **three** PingOne applications:
+You need **six** PingOne applications now — one per hop in the chained
+RFC 8693 delegation (see `CLAUDE.md` "RFC 8693 chained delegation" for the
+full picture of why each hop mints its own credential instead of one
+token being forwarded unchanged). They break into three pairs, one pair
+per service that has its own identity:
 
-1. **User sign-in app** (OIDC Web App)
-   - Grant type: Authorization Code, **PKCE required (S256)**
-   - Redirect URI: `http://localhost:8000/api/auth/callback` (dev) — or
-     `http://localhost:8080/api/auth/callback` if running via `docker compose`
-   - Post-logout redirect URI: your frontend origin
-   - The **resource behind this app's access token must also issue JWT**
-     (not opaque/reference) tokens — even though this app itself only ever
-     needs to verify an *ID* token (always a JWT), its *access* token is
-     later sent as Token Exchange's `subject_token` (`/api/auth/agent-token`,
-     step 2) when approving an agent action, and PingOne can only read
-     claims off a JWT there. Opaque/reference fails with a clear PingOne
-     error — `Cannot parse token claims for request param 'subject_token'`
-     — not a silent success. In PingOne this is usually under
-     **Connections → Resources → [the resource this app's tokens are
-     minted against, often the default "PingOne API" one] → Access Token
-     Type**.
-   - → `OIDC_DISCOVERY_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
-     `OIDC_POST_LOGOUT_REDIRECT_URI`
+**1. User sign-in app** (OIDC Web App)
+- Grant type: Authorization Code, **PKCE required (S256)**
+- Redirect URI: `http://localhost:8000/api/auth/callback` (dev) — or
+  `http://localhost:8080/api/auth/callback` if running via `docker compose`
+- Post-logout redirect URI: your frontend origin
+- The **resource behind this app's access token must also issue JWT**
+  (not opaque/reference) tokens — even though this app itself only ever
+  needs to verify an *ID* token (always a JWT), its *access* token is
+  later sent as the very first Token Exchange's `subject_token`, and
+  PingOne can only read claims off a JWT there. Opaque/reference fails
+  with a clear PingOne error — `Cannot parse token claims for request
+  param 'subject_token'` — not a silent success. In PingOne this is
+  usually under **Connections → Resources → [the resource this app's
+  tokens are minted against, often the default "PingOne API" one] →
+  Access Token Type**.
+- → `OIDC_DISCOVERY_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
+  `OIDC_POST_LOGOUT_REDIRECT_URI` (`backend/.env`)
 
-2. **Agent worker app** (Service/Worker app)
-   - Grant types: **Client Credentials** and **Token Exchange**
-   - Token endpoint auth method: `client_secret_basic`
-   - Define `todos:read` and `todos:write` (or your own names — just keep
-     `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` matching) as scopes on the
-     resource, and set that resource's **access token format to JWT** (not
-     opaque/reference) — inbound auth can only cryptographically verify a JWT
-   - → `AGENT_CLIENT_ID`, `AGENT_CLIENT_SECRET`, `AGENT_SCOPES` (the agent's
-     own actor-token scope, step 1), `AGENT_EXPECTED_AUDIENCE` (what inbound
-     auth checks a delegated token's `aud` against — falls back to
-     `AGENT_CLIENT_ID`), `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` (the two
-     per-action delegation scopes token exchange requests, step 2 — one
-     independent exchange call per scope, not a single blanket one)
+**2. Chat Agent's own identity app** (Worker/Service app)
+- Grant type: **Client Credentials** only
+- Token endpoint auth method: `client_secret_basic`
+- Define `agent:orchestration` (or your own name — keep
+  `AGENT_OWN_SCOPE` matching) as a scope on a resource whose **audience is
+  the Chat Agent's own URL** (`http://localhost:8000`) and whose access
+  token format is **JWT**
+- → `AGENT_CLIENT_ID`, `AGENT_CLIENT_SECRET`, `AGENT_OWN_SCOPE` (`backend/.env`)
 
-3. **Todos MCP server sign-in app** (OIDC Web App) — a dedicated app for
-   `mcp-todos-server/`'s own UI, separate from app #1. Same shape as #1:
-   - Grant type: Authorization Code, **PKCE required (S256)**
-   - Redirect URI: `http://localhost:9000/api/auth/callback` (dev) — or
-     `http://localhost:8081/api/auth/callback` if running via `docker compose`
-   - Post-logout redirect URI: `mcp-todos-server/`'s frontend origin
-   - → `mcp-todos-server/.env`'s `OIDC_DISCOVERY_URL`, `OIDC_CLIENT_ID`,
-     `OIDC_CLIENT_SECRET`, `OIDC_POST_LOGOUT_REDIRECT_URI` — its own values,
-     not shared with app #1's
+**3. Chat Agent's delegation-exchange app** (Worker/Service app) —
+deliberately a *different* app from #2: "an agent proving who it is" and
+"a client trusted to mint delegated tokens" are different privilege
+levels in a real deployment.
+- Grant types: **Client Credentials** and **Token Exchange**
+- Token endpoint auth method: `client_secret_basic`
+- Define `agent:delegation` (or your own name — keep
+  `AGENT_DELEGATION_SCOPE` matching) as a scope on a resource whose
+  **audience is the Task Agent's own URL** (`http://localhost:9010`) and
+  whose access token format is **JWT**
+- → `AGENT_DELEGATION_CLIENT_ID`, `AGENT_DELEGATION_CLIENT_SECRET`,
+  `AGENT_DELEGATION_SCOPE` (`backend/.env`)
 
-All three blocks are independent — you can enable just the sign-in app
-first, add the others as you go.
+**4. Todos MCP server sign-in app** (OIDC Web App) — a dedicated app for
+`mcp-todos-server/`'s own UI, separate from app #1, same shape:
+- Grant type: Authorization Code, **PKCE required (S256)**
+- Redirect URI: `http://localhost:9000/api/auth/callback` (dev) — or
+  `http://localhost:8081/api/auth/callback` if running via `docker compose`
+- Post-logout redirect URI: `mcp-todos-server/`'s frontend origin
+- → `mcp-todos-server/.env`'s `OIDC_DISCOVERY_URL`, `OIDC_CLIENT_ID`,
+  `OIDC_CLIENT_SECRET`, `OIDC_POST_LOGOUT_REDIRECT_URI` — its own values,
+  not shared with app #1's
 
-`SESSION_SECRET` is required by any of them (any long random string; it's
-hashed into the 32-byte key used for JWE session encryption — use a
-*different* value per service, they don't share sessions). `ANTHROPIC_API_KEY`
-is required for the chat panel itself (LangGraph calls `claude-sonnet-5` by
-default — set `AGENT_MODEL` to change it).
+**5. Task Agent's own identity app** (Worker/Service app) — same shape
+as #2, one hop later:
+- Grant type: **Client Credentials** only
+- Token endpoint auth method: `client_secret_basic`
+- Define `agent:task` (or your own name — keep `AGENT_TASK_SCOPE`
+  matching) as a scope on a resource whose **audience is the Task Agent's
+  own URL** (`http://localhost:9010`) and whose access token format is **JWT**
+- → `TASK_AGENT_CLIENT_ID`, `TASK_AGENT_CLIENT_SECRET`, `AGENT_TASK_SCOPE`
+  (`task-agent/.env`)
 
-If you're also running `task-agent/` and `mcp-todos-server/` (see above),
-**both** need the *same* `OIDC_DISCOVERY_URL`, `AGENT_EXPECTED_AUDIENCE`,
-`TODOS_READ_SCOPE`, and `TODOS_WRITE_SCOPE` as `backend/.env` — the Chat
-Agent's delegated token is forwarded unchanged all the way through
-task-agent to mcp-todos-server, and each hop independently re-verifies it,
-including its `scope` claim, rather than trusting the previous hop. Set
-`task-agent/.env`'s *and* `mcp-todos-server/.env`'s `ALLOWED_AGENT_CLIENT_ID`
-to `backend/.env`'s `AGENT_CLIENT_ID` — that's what each service's own
-policy check (`task-agent/app/policy.py`, `mcp-todos-server/app/policy.py`)
-checks identity against, alongside scope. Three copies of the same "must
-match exactly" values now — a mismatch anywhere fails with a correct
-`audience_mismatch`/`issuer_mismatch`/policy denial, not a bug, but easy to
-forget to update everywhere.
+**6. Task Agent's MCP-exchange app** (Worker/Service app) — same shape
+as #3, one hop later:
+- Grant type: **Token Exchange**
+- Token endpoint auth method: `client_secret_basic`
+- Define `todos:read` and `todos:write` (or your own names — keep
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` matching) as scopes on a resource
+  whose **audience is the MCP server's own URL**
+  (`http://localhost:9000/mcp`) and whose access token format is **JWT**
+- → `TODOS_MCP_CLIENT_ID`, `TODOS_MCP_CLIENT_SECRET`,
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` (`task-agent/.env`)
+
+All six are independent — you can enable just the sign-in app first, add
+the rest as you go; each pair only unlocks once both its apps are filled in.
+
+`SESSION_SECRET` is required by either sign-in app (any long random
+string; hashed into the 32-byte key used for JWE session encryption — use
+a *different* value per service, they don't share sessions).
+`ANTHROPIC_API_KEY` is required for the chat panel (LangGraph calls
+`claude-sonnet-5` by default — set `AGENT_MODEL` to change it).
+
+**What must match across services, and what must NOT**: `OIDC_DISCOVERY_URL`
+must be identical everywhere (same PingOne tenant). Each service's own
+`AGENT_EXPECTED_AUDIENCE` must be **its own URL**, not shared — that's the
+whole point of the redesign, so don't try to make `backend/.env`,
+`task-agent/.env`, and `mcp-todos-server/.env`'s audiences match each
+other. `task-agent/.env`'s `ALLOWED_AGENT_CLIENT_ID` must be app #3's
+client_id (`AGENT_DELEGATION_CLIENT_ID`) — that's whose identity PingOne
+propagates onto the token task-agent receives (see `CLAUDE.md`'s
+`agent_client_id`-vs-`client_id` gotcha). `mcp-todos-server/.env`'s
+`ALLOWED_AGENT_CLIENT_ID` must be app #5's client_id
+(`TASK_AGENT_CLIENT_ID`), for the same reason, one hop later.
+`task-agent/.env` and `mcp-todos-server/.env`'s `TODOS_READ_SCOPE`/
+`TODOS_WRITE_SCOPE` must match each other exactly (`backend/.env` doesn't
+have these settings at all anymore).
 
 ## Docker
 
@@ -224,38 +265,61 @@ configuration.
 - `backend/app/telemetry.py` — the `RecordingSpanProcessor` ring buffer and
   redaction filter every other module wraps calls in via `with_span(...)`.
 - `backend/app/auth/oidc.py`, `pkce.py`, `session.py` — PingOne sign-in.
-- `backend/app/auth/agent_auth.py` — Client Credentials + Token Exchange.
+- `backend/app/auth/agent_auth.py` — `client_credentials_grant()`/
+  `token_exchange()`, both taking an explicit `client_id`/`client_secret`
+  pair now (not a single fixed one off Settings) — the Chat Agent uses a
+  *different* PingOne app for step 1 (proving its own identity) than step
+  2 (performing Token Exchange).
 - `backend/app/auth/routes.py` — wires the above into
-  `/api/auth/{login,callback,logout,agent-token,me}`.
-- `backend/app/auth/inbound.py` — the inbound-auth check `backend/app/routes/invoke.py`
-  runs for whichever exchanged-scope tokens are present: each re-verified
-  fresh (signature/issuer/expiry/audience), never just trusted because it's
-  sealed in a cookie.
+  `/api/auth/{login,callback,logout,agent-token,me}`. `/agent-token` takes
+  no request body anymore (no more per-scope `{"scope": "..."}`) — it's a
+  single, session-wide "approve delegation to the Task Agent" action.
+- `backend/app/auth/inbound.py` — the inbound-auth check
+  `backend/app/routes/invoke.py` runs on the cached delegation token
+  before forwarding it — verified against the *Task Agent's* audience
+  (`settings.task_agent_url`), not this service's own, since the token is
+  addressed to the Task Agent, not to `backend/` itself.
 - `backend/app/agent/graph.py` — the Chat Agent's LangGraph graph:
   `assistant` (Claude) ↔ `tools` (`ask_task_agent_read`/`ask_task_agent_write`),
   streamed over SSE once inbound auth passes for the base session.
 - `backend/app/agent/tools.py` — the two delegation tools: real A2A client
-  calls to the Task Agent, each forwarding the delegated token for its own
-  scope specifically (`config["configurable"]["bearer_tokens"][scope]`).
+  calls to the Task Agent, both forwarding the same single delegation
+  token (`config["configurable"]["delegated_token"]`) — the tool the model
+  chooses still shapes the request text, not which credential is sent.
 - `shared/src/agentorchestration_shared/inbound_auth.py` — the inbound-auth
   verification `backend/`, `task-agent/`, *and* `mcp-todos-server/` all use
-  (imported, not duplicated) — signature/issuer/expiry/audience/scope,
-  checked fresh every call, plus a best-effort `email` claim and the
-  `aud` actually verified against, both used for the OBO audit log.
+  (imported, not duplicated) — signature/issuer/expiry/audience, checked
+  fresh every call, plus `email`, `aud`, and `agent_client_id` (the custom
+  claim PingOne propagates from an exchange's *actor* token — what every
+  policy ACL in this repo actually checks identity against, not the
+  top-level `client_id`; see `CLAUDE.md`).
+- `task-agent/app/token_grants.py` — this service's own
+  `client_credentials_grant()`/`token_exchange()`, deliberately duplicated
+  from `backend/app/auth/agent_auth.py`'s identical shape (not shared —
+  `shared/` is for inbound-auth verification only).
 - `task-agent/app/agent_executor.py` — the Task Agent's A2A `AgentExecutor`:
-  verifies the incoming token (and its scope) before touching its own graph
-  (`task-agent/app/graph.py`), which reasons about which MCP tool to call.
-  Rebuilds its MCP connection fresh per task (not cached at startup),
-  forwarding that request's own verified bearer token as an
-  `Authorization` header so `mcp-todos-server` can independently verify it
-  too, one hop further.
-- `task-agent/app/policy.py` — the tool-access check: identity ACL *and*
-  the token's granted scope, both required, checked per tool call via
-  `ToolNode`'s `awrap_tool_call` hook — a plain function, not a graph node
-  or an LLM's judgment call.
+  verifies the incoming delegation token (audience = its own URL, scope
+  must contain `agent:delegation`) before touching its own graph
+  (`task-agent/app/graph.py`). Threads `identity.agent_client_id` (not
+  `identity.client_id`) into the policy check, and the raw verified token
+  itself as `delegation_token` — used downstream as the *subject* token
+  for this service's own further exchange.
+- `task-agent/app/graph.py` — MCP tools fetched once per task for schema
+  only (no auth needed for `tools/list`); the real work is in
+  `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
+  policy check, then this service's own Client Credentials (cached per
+  task) + a **fresh, per-tool-call** Token Exchange scoped to exactly
+  `todos:read` or `todos:write`, then a freshly-authorized MCP connection
+  built just for that one call. This is what gives step-up scoping for
+  free — nothing about which scope was granted is cached across calls.
+- `task-agent/app/policy.py` — identity-ACL only now (not scope — the
+  inbound token's scope is always the generic `agent:delegation`; real
+  enforcement of *which* action is allowed is whether the exchange above
+  succeeds, and `mcp-todos-server`'s own independent check).
 - `mcp-todos-server/app/mcp_server.py` — the MCP tool surface itself. Every
-  tool independently re-verifies the forwarded bearer token and re-checks
-  policy (`mcp-todos-server/app/policy.py`, same shape as task-agent's) —
+  tool independently re-verifies the token task-agent's own exchange
+  produced and re-checks policy (`mcp-todos-server/app/policy.py` — this
+  one *does* still check scope, since the token genuinely carries it) —
   this service doesn't trust that task-agent already gated the call.
 - `mcp-todos-server/app/audit.py` — the OBO audit log: an in-memory ring
   buffer (same shape as `backend/app/telemetry.py`'s span buffer), one
@@ -289,19 +353,23 @@ third tool or a third agent) — the short version:
 
 - **New mocked tool**: add it to `mcp-todos-server/app/mcp_server.py`
   (verify the caller + check policy + record an audit entry, same shape as
-  the existing three tools), add identity + required-scope entries in
-  **both** `task-agent/app/policy.py` and `mcp-todos-server/app/policy.py`
-  — each service gates independently, neither trusts the other's gate.
-  `MultiServerMCPClient` picks up the new tool automatically, nothing else
-  changes.
+  the existing three tools), add an identity ACL entry to
+  `mcp-todos-server/app/policy.py` and a required-scope entry to
+  `task-agent/app/graph.py`'s `_REQUIRED_SCOPE_SETTING` map (which scope
+  task-agent's own exchange requests for it) — each service gates
+  independently, neither trusts the other's gate. `MultiServerMCPClient`
+  picks up the new tool automatically, nothing else changes.
 - **New Chat Agent capability**: add a `@tool` in `backend/app/agent/tools.py`,
-  register it in `graph.py`'s `_TOOLS` list. New scope needed? Add it to
-  `Settings.allowed_delegation_scopes` (`backend/app/config.py`) first —
-  `/api/auth/agent-token` refuses to exchange for anything not in that set.
+  register it in `graph.py`'s `_TOOLS` list. The Chat Agent no longer
+  tracks per-capability scopes itself (see "Chained RFC 8693 delegation" in
+  `CLAUDE.md`) — it just needs a delegation credential to exist at all,
+  which every tool already shares.
 - **A third agent**: same shape as `task-agent/` — own `AgentCard`, own
-  `AgentExecutor` doing inbound auth first, own graph. Whether it shares the
-  Chat Agent's token audience or needs a fresh (nested) token exchange is
-  the main design question, not yet resolved either way.
+  `AgentExecutor` doing inbound auth first, own graph, and (following the
+  pattern task-agent itself now uses) its own PingOne worker-app identity
+  plus its own RFC 8693 exchange for whatever resource it actually touches,
+  rather than forwarding an upstream token unchanged. `task-agent/app/graph.py`'s
+  `_scoped_tool_call` is the worked example to copy.
 - **Settings persistence**: the reference app's runtime-editable Settings
   panel (`/api/config` + `/api/settings`) isn't built yet — `app/config.py`
   is structured so adding a writable-at-runtime layer over `Settings` is a

@@ -52,66 +52,91 @@ standard `langgraph.prebuilt` usage; nothing bespoke.
 
 **Task Agent** (`task-agent/app/graph.py`, separate process, own A2A
 server) — `task_assistant` (Claude, tools bound from
-`langchain_mcp_adapters.MultiServerMCPClient({...}).get_tools()`) ↔
-`execute_tool` (`ToolNode(tools, awrap_tool_call=_policy_wrap_tool_call)`).
+`langchain_mcp_adapters.MultiServerMCPClient({...}).get_tools()`, fetched
+once per task **purely for schemas** — `tools/list` needs no auth) ↔
+`execute_tool` (`ToolNode(tools, awrap_tool_call=_wrap)`, where `_wrap`
+calls `_scoped_tool_call` — full custom dispatch, not just a gate: it
+performs this service's own delegation chain and builds a
+freshly-authorized MCP connection per call, rather than executing the
+schema-only tool objects directly).
 
 **The actual cross-process hop**: `backend/app/agent/tools.py`'s
 `ask_task_agent_read`/`ask_task_agent_write` — thin `@tool async def`
 wrappers (not graph nodes themselves; they're what `ToolNode` executes)
-around a shared `_delegate(request, config, *, scope)` helper. Each reads
-its own scope's token from `config["configurable"]["bearer_tokens"][scope]`
-(a dict keyed by scope, not a single token) — injected by giving the tool
+around a shared `_delegate(request, config, *, intent)` helper. Both read
+the *same* single delegation token from
+`config["configurable"]["delegated_token"]` — injected by giving the tool
 function a `config: RunnableConfig` parameter, which LangChain
-auto-populates and hides from the tool's schema — and makes a *real* A2A
+auto-populates and hides from the tool's schema — and make a *real* A2A
 client call via `a2a.client.create_client(...)`. Not an in-process function
-call to anything in `task-agent/`.
+call to anything in `task-agent/`. `intent` ("read"/"write") is telemetry
+labeling only now — it no longer selects a different OAuth scope at this
+layer.
 
-### Per-action scoped delegation (why this is a stronger demo than it looks)
+### Chained RFC 8693 delegation (why this is a stronger demo than it looks)
 
-There is no single "the agent is authenticated" state. Delegation is scoped
-per action (`todos:read` / `todos:write` — see `Settings.todos_read_scope`
-/ `todos_write_scope`), each approved independently via its own RFC 8693
-Token Exchange (`POST /api/auth/agent-token {"scope": "..."}`,
-`backend/app/auth/routes.py`), the first time that specific scope is
-needed. `backend/app/auth/session.py`'s `EXCHANGED_TOKEN_COOKIE` holds a
-**dict keyed by scope**, not one token — approving `todos:read` never
-grants `todos:write`.
+There is no single "the agent is authenticated" state, and — since the
+2026-08-16 redesign — no single token forwarded unchanged through every
+hop either. Each service that acts mints its own credential, right before
+it acts, scoped to exactly what it's about to do:
 
-When a tool needs a scope with no entry in that dict yet, it returns
-`NEEDS_AGENT_AUTH_MARKER` (`backend/app/agent/tools.py`); `routes/invoke.py`
-maps the firing tool name back to its required scope and emits an
-`auth_required` SSE event carrying `{"scope": "..."}`. The frontend's
-`InlineAgentApprovalPrompt.tsx` renders off that event, scoped to exactly
-that one action.
+- **Chat Agent**: Client Credentials (own identity, scope
+  `agent_own_scope`, a PingOne app dedicated to this) → RFC 8693 Token
+  Exchange (`POST /api/auth/agent-token`, no request body — one approval
+  per session now, not per action) using a **different** PingOne app,
+  scope always `agent_delegation_scope` (generic — never
+  action-specific). `backend/app/auth/session.py`'s `EXCHANGED_TOKEN_COOKIE`
+  holds a single token now, not a dict keyed by scope.
+- **Task Agent**: verifies that inbound token (audience = its own URL,
+  scope must contain `agent_delegation_scope`) → Client Credentials (own
+  identity, scope `agent_task_scope`, cached per task) → RFC 8693 Token
+  Exchange **fresh, every tool call** (`subject_token` = the token it
+  received from the Chat Agent, `actor_token` = its own, scope =
+  `todos_read_scope` or `todos_write_scope` depending on which specific
+  tool is about to run) — this is where per-action scoping actually lives
+  now, and it's what gives step-up scoping for free: nothing about which
+  scope was granted is cached across different tool calls, so a `todos:read`
+  succeeding earlier has no bearing on whether a later `todos:write`
+  attempt succeeds.
 
-The Chat Agent forwards the delegated token for whichever scope a tool
-needs — never a new/nested token, and never a token for a *different*
-scope than what's needed. The Task Agent independently re-verifies both the
-token **and its `scope` claim** (`shared/inbound_auth.VerifiedIdentity.scope`,
-checked in `task-agent/app/policy.py`) before it will act on a given tool —
-it extends zero implicit trust to the Chat Agent's own prior verification
-*or* to whichever token the Chat Agent happened to attach. Verified this
-holds adversarially: a validly-signed, correctly-audienced token scoped
-only `todos:read`, sent directly to the Task Agent bypassing the Chat
-Agent's own tool availability, asking it to write, was independently
-rejected with no mutation.
+When the Chat Agent has no delegation credential yet, `_delegate()`
+returns `NEEDS_AGENT_AUTH_MARKER`; `routes/invoke.py` emits a generic
+`auth_required` SSE event (no scope payload anymore — there's only one
+thing to approve at this layer). The frontend's
+`InlineAgentApprovalPrompt.tsx` renders off that event.
 
-`backend/.env`, `task-agent/.env`, and `mcp-todos-server/.env`'s
-`OIDC_DISCOVERY_URL`, `AGENT_EXPECTED_AUDIENCE`, `TODOS_READ_SCOPE`, and
-`TODOS_WRITE_SCOPE` must all match exactly for this to work — the
-delegated token is forwarded unchanged through both hops and each service
-independently re-verifies it; a mismatch fails with a genuinely correct
-`audience_mismatch`/`issuer_mismatch`, not a bug. `mcp-todos-server` also
-independently re-checks policy (its own `app/policy.py`, same shape as
-task-agent's) rather than trusting that task-agent already gated the
-call — every call, allowed or denied, is written to its OBO audit log
+Each service independently re-verifies whatever it receives — zero
+implicit trust in a previous hop's say-so. Verified this holds
+adversarially, both before and after the redesign: a validly-signed,
+correctly-audienced token scoped only `todos:read`, sent directly to
+whichever service is the real enforcement point, asking it to write, was
+independently rejected with no mutation.
+
+**Critical claim gotcha, confirmed via real PingOne tokens 2026-08-16**:
+every policy ACL (`task-agent/app/policy.py`, `mcp-todos-server/app/policy.py`)
+must check `VerifiedIdentity.agent_client_id` — the custom claim PingOne
+propagates from whichever *actor* token fed the exchange that produced the
+token being verified (i.e. which agent is actually delegating) — **not**
+`.client_id`, which is just whichever PingOne app happened to authenticate
+that specific exchange call. Both policy files had this backwards briefly
+before real tokens caught it; see `CLAUDE.md`'s "RFC 8693 chained
+delegation" section for the full worked example.
+
+`task-agent/.env` and `mcp-todos-server/.env`'s `OIDC_DISCOVERY_URL` must
+match (same PingOne tenant); their `AGENT_EXPECTED_AUDIENCE` values must
+**NOT** match each other — each is that service's own URL now, not a
+shared value. `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` must match between
+just those two services (`backend/.env` doesn't have these settings at
+all anymore). `mcp-todos-server` independently re-checks policy (its own
+`app/policy.py` — unlike task-agent's copy, it *does* still check scope,
+since the token it receives genuinely carries `todos:read`/`todos:write`)
+rather than trusting that task-agent already gated the call — every call,
+allowed or denied, is written to its OBO audit log
 (`mcp-todos-server/app/audit.py`).
 
-A real next step, not yet built: the Task Agent expecting a *narrower*,
-distinct audience of its own (on top of the scope check it already does),
-which would require the Chat Agent to do a second RFC 8693 token exchange
-before delegating (true nested/rescoped delegation, rather than forwarding
-the same-audience token for every scope).
+The "Task Agent expecting a narrower, distinct audience, requiring a
+second token exchange" next-step mentioned in earlier versions of this
+doc is now **built** — that's exactly what the chain above is.
 
 ### Extending with a third tool or a third agent
 
@@ -119,26 +144,30 @@ the same-audience token for every scope).
   `mcp-todos-server/app/mcp_server.py` as another `@mcp.tool` function
   (verify the caller with `_authorize(tool_name)`, then call `_record(...)`
   on success — copy the shape of `list_todos`/`add_todo`/`complete_todo`
-  exactly), then add entries to **both** `task-agent/app/policy.py`'s and
-  `mcp-todos-server/app/policy.py`'s `_identity_acl()` and
-  `_required_scope()` (pick whichever of `todos_read_scope`/
-  `todos_write_scope` fits, or a new scope entirely if it's a genuinely
-  different capability) — each service's gate is independent, update both
-  or the new tool is quietly rejected at the second hop even once the Task
-  Agent allows it. Nothing else changes —
-  `MultiServerMCPClient.get_tools()` picks it up automatically.
+  exactly), then: (1) add an identity ACL entry to
+  `mcp-todos-server/app/policy.py`'s `_identity_acl()`, and (2) add an
+  entry to `task-agent/app/graph.py`'s `_REQUIRED_SCOPE_SETTING` map
+  (which `Settings` attribute names the scope task-agent's own exchange
+  should request for this tool — pick `todos_read_scope`/
+  `todos_write_scope` or add a new scope entirely for a genuinely
+  different capability). Each service's gate is independent — miss either
+  and the new tool is quietly rejected at that hop even once the others
+  allow it. Nothing else changes — `MultiServerMCPClient.get_tools()`
+  picks it up automatically for schema purposes.
 - **New tool/capability on the Chat Agent**: add another `@tool async def`
-  in `backend/app/agent/tools.py` (following the `_delegate(..., scope=...)`
-  pattern if it needs request-scoped credentials), add it to the `_TOOLS`
-  list in `backend/app/agent/graph.py`. If it needs a new scope, add it to
-  `Settings.allowed_delegation_scopes` (`backend/app/config.py`) — `/api/auth/agent-token`
-  refuses to exchange for anything not in that set.
+  in `backend/app/agent/tools.py` (following the `_delegate(..., intent=...)`
+  pattern), add it to the `_TOOLS` list in `backend/app/agent/graph.py`.
+  The Chat Agent doesn't track per-capability scopes itself anymore — every
+  tool shares the same delegation credential; the Task Agent decides the
+  actual downstream scope, per call, when it performs its own exchange.
 - **A third agent**: give it its own directory (sibling to `task-agent/`),
   its own `AgentCard`/`AgentExecutor`/graph following `task-agent/app/`'s
   shape exactly, and its own inbound-auth check calling
-  `agentorchestration_shared.verify_bearer_token` — don't reimplement verification.
-  Whether it shares the Chat Agent's audience or gets a distinct one
-  (requiring a fresh token exchange) is the same open question as above.
+  `agentorchestration_shared.verify_bearer_token` — don't reimplement
+  verification. Give it its own PingOne worker-app identity and its own
+  RFC 8693 exchange for whatever resource it actually touches, mirroring
+  `task-agent/app/graph.py`'s `_scoped_tool_call` — don't have it just
+  forward an upstream token unchanged; that was the pre-2026-08-16 design.
 
 ## Verified library APIs (don't re-derive from docs, they were wrong once)
 
@@ -175,8 +204,16 @@ exist in `a2a-sdk` 1.1.2; it's `a2a.server.routes`).
   awrap_tool_call=handler)` where `handler(request: ToolCallRequest,
   execute) -> ToolMessage | Command` — `request.runtime.config["configurable"]`
   is how the handler reads values threaded in from the outer graph
-  invocation (e.g. the verified `client_id` *and* `granted_scope` for the
-  policy check).
+  invocation. The `execute` callback is optional to actually call —
+  `task-agent/app/graph.py`'s `_scoped_tool_call` never calls it; it does
+  full custom dispatch instead (its own token exchange, then a freshly-built
+  MCP connection), which is a legitimate use of the hook, not a workaround.
+- **Custom claims on an exchanged token aren't just the standard OAuth
+  ones** — a real PingOne Token Exchange response carries a custom
+  `agent_client_id` claim (propagated from the actor token) alongside the
+  standard top-level `client_id` (whichever app authenticated *that*
+  request). Don't assume a claim name from the RFC text; decode a real
+  token before writing a policy check against a new one.
 - **`AIMessage.content` is `str | list[dict]`**, not always a plain
   string — normalize with an `_extract_text()` helper (see both
   `backend/app/routes/invoke.py` and `task-agent/app/agent_executor.py`)

@@ -131,7 +131,9 @@ function AuditEntryRow({ entry }: { entry: AuditEntry }) {
         )}
         {isAgent && entry.agent_client_id && (
           <div className="contents">
-            <dt className="whitespace-nowrap text-ink-muted">client_id</dt>
+            <dt className="whitespace-nowrap text-ink-muted" title="Which agent is delegating — propagated from the actor token used in the exchange that produced this call's credential, not whichever app merely performed that exchange.">
+              agent_client_id
+            </dt>
             <dd className="min-w-0 break-all text-ink">{entry.agent_client_id}</dd>
           </div>
         )}

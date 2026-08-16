@@ -1,15 +1,15 @@
 """ask_task_agent_{read,write} — delegate to the Task Agent over the real A2A
 protocol (not an in-process call). Two separate tools, not one with a
-read/write parameter, so the model's own tool choice *is* the read/write
-signal — the same "let the model decide via real tool-calling" principle
-the rest of this codebase already follows, applied to scope selection too.
-
-Each forwards the delegated token for its OWN specific scope
-("todos:read" / "todos:write") — obtained via its own independent RFC 8693
-Token Exchange, not a single blanket token covering everything. See
-CLAUDE.md "Identity propagation across the A2A hop" and "Per-action scoped
-delegation". The Task Agent independently re-verifies the token AND its
-scope; nothing here is trusted on say-so.
+read/write parameter, so the model's own tool choice still shapes how it
+phrases its request to the Task Agent — but that choice no longer selects
+a different OAuth scope at this layer. Both tools forward the SAME
+delegation token (Client Credentials + RFC 8693 Token Exchange, scoped
+generically `agent:delegation`, addressed to the Task Agent) — this
+service doesn't decide todos:read vs todos:write; the Task Agent does,
+via its own further exchange, once it actually knows what's being asked.
+See CLAUDE.md "Identity propagation across the A2A hop" (2026-08-16
+redesign). The Task Agent independently re-verifies the token; nothing
+here is trusted on say-so.
 """
 
 from __future__ import annotations
@@ -51,10 +51,9 @@ def _task_agent_confirmation(task) -> str | None:
     return None
 
 
-async def _delegate(request: str, config: RunnableConfig, *, scope: str) -> str:
+async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str:
     configurable = config.get("configurable", {})
-    bearer_tokens: dict[str, str] = configurable.get("bearer_tokens") or {}
-    bearer_token = bearer_tokens.get(scope)
+    delegated_token: str | None = configurable.get("delegated_token")
     task_agent_url = configurable.get("task_agent_url")
     caller_sub = configurable.get("caller_sub", "")
     caller_agent_client_id = configurable.get("caller_agent_client_id", "")
@@ -65,26 +64,26 @@ async def _delegate(request: str, config: RunnableConfig, *, scope: str) -> str:
             "a2a.task_agent_url": task_agent_url or "",
             "identity.sub": caller_sub,
             "identity.agent_client_id": caller_agent_client_id,
-            "oauth.scope": scope,
+            "agent.intent": intent,
         },
     ) as span:
         if not task_agent_url:
             span.set_attribute("a2a.result", "misconfigured")
             return "The Task Agent is not reachable right now (missing configuration)."
 
-        if not bearer_token:
-            # Expected, common state — the user hasn't approved this
-            # specific action yet. Not an error: they just need to approve
-            # it (which does RFC 8693 Token Exchange for exactly this scope)
+        if not delegated_token:
+            # Expected, common state — the user hasn't approved delegating
+            # to the Task Agent yet. Not an error: they just need to
+            # approve it (Client Credentials + RFC 8693 Token Exchange)
             # and then repeat their request.
             span.set_attribute("a2a.result", "needs_agent_auth")
             return (
-                f"{NEEDS_AGENT_AUTH_MARKER}: To do this, the agent needs the user to approve this "
-                f"specific action first — it doesn't have a delegated token scoped for {scope!r} yet. "
-                "Tell the user to click \"Approve Agent Action\" and then repeat their request."
+                f"{NEEDS_AGENT_AUTH_MARKER}: To do this, the agent needs the user to approve delegating "
+                "this task to the Task Agent first — it doesn't have a delegated token yet. Tell the "
+                "user to click \"Approve Agent Action\" and then repeat their request."
             )
 
-        headers = {"Authorization": f"Bearer {bearer_token}"}
+        headers = {"Authorization": f"Bearer {delegated_token}"}
         async with httpx.AsyncClient(headers=headers, timeout=30) as httpx_client:
             resolver = A2ACardResolver(httpx_client=httpx_client, base_url=task_agent_url)
             card = await resolver.get_agent_card()
@@ -126,12 +125,7 @@ async def ask_task_agent_read(request: str, config: RunnableConfig) -> str:
     """Delegate a READ-ONLY request to the Task Agent — use this for viewing
     or listing the user's todos. Never use this for adding, completing, or
     otherwise changing anything; use ask_task_agent_write for that."""
-    # Actual scope string comes from configurable (backend/app/config.py's
-    # TODOS_READ_SCOPE), not hardcoded here, so a deployment that customizes
-    # it can't drift between what's requested from PingOne and what this
-    # tool looks up in bearer_tokens.
-    scope = config.get("configurable", {}).get("todos_read_scope", "todos:read")
-    return await _delegate(request, config, scope=scope)
+    return await _delegate(request, config, intent="read")
 
 
 @tool
@@ -140,8 +134,5 @@ async def ask_task_agent_write(request: str, config: RunnableConfig) -> str:
     new todo or marking one complete, or any other change to the user's
     todo list. Describe what to do in plain language (e.g. "mark 'buy milk'
     as complete") — you do not need a todo's internal id first; the Task
-    Agent looks it up itself. This requires separate approval from read
-    access, and the user may be asked to approve it even if they already
-    approved reading."""
-    scope = config.get("configurable", {}).get("todos_write_scope", "todos:write")
-    return await _delegate(request, config, scope=scope)
+    Agent looks it up itself."""
+    return await _delegate(request, config, intent="write")

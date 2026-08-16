@@ -3,20 +3,10 @@ import { useState } from "react"
 type Status = "idle" | "loading" | "error"
 
 interface Props {
-  scope: string
-  onApprove: (scope: string) => Promise<void>
+  onApprove: () => Promise<void>
 }
 
-const SCOPE_LABELS: Record<string, string> = {
-  "todos:read": "view your todo list",
-  "todos:write": "add or complete items on your todo list",
-}
-
-function describeScope(scope: string): string {
-  return SCOPE_LABELS[scope] ?? `use the "${scope}" permission`
-}
-
-export function InlineAgentApprovalPrompt({ scope, onApprove }: Props) {
+export function InlineAgentApprovalPrompt({ onApprove }: Props) {
   const [status, setStatus] = useState<Status>("idle")
   const [error, setError] = useState<string | null>(null)
 
@@ -24,7 +14,7 @@ export function InlineAgentApprovalPrompt({ scope, onApprove }: Props) {
     setStatus("loading")
     setError(null)
     try {
-      await onApprove(scope)
+      await onApprove()
       // On success the parent removes this prompt (it re-runs the turn),
       // so no "success" status is needed here.
     } catch (err) {
@@ -40,10 +30,9 @@ export function InlineAgentApprovalPrompt({ scope, onApprove }: Props) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-xs text-ink">
-          The agent needs your approval to <strong>{describeScope(scope)}</strong> — it doesn&rsquo;t have that
-          permission yet.
+          The agent needs your approval to <strong>delegate this to the Task Agent</strong> — it doesn&rsquo;t have
+          that permission yet.
         </p>
-        <p className="mt-0.5 font-mono text-[10px] text-ink-muted">{scope}</p>
         {status === "error" && error && <p className="mt-1 text-xs text-danger">{error}</p>}
       </div>
       <button

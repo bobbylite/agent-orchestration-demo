@@ -48,7 +48,7 @@ export default function App() {
             prev.map((m) => (m.id === assistantMessageId ? { ...m, content: m.content + text } : m)),
           )
         },
-        onAuthRequired: (scope) => updateMessage(assistantMessageId, { pendingApprovalScope: scope }),
+        onAuthRequired: () => updateMessage(assistantMessageId, { needsApproval: true }),
         onDone: () => setSending(false),
         onError: (message) => {
           updateMessage(assistantMessageId, { content: `⚠ ${message}` })
@@ -70,15 +70,13 @@ export default function App() {
     await runTurn(content, assistantMessage.id)
   }
 
-  // Approve inline (RFC 8693 Token Exchange for exactly this one scope),
-  // then automatically retry the same request — "ask → approve → try
-  // again" as one flow, not a second manual step. Approving one scope
-  // (e.g. reading) never grants another (e.g. writing) — asking for a
-  // write action afterwards will prompt again, for "todos:write" specifically.
-  async function handleInlineApprove(assistantMessageId: string, originalContent: string, scope: string) {
-    await api.approveAgentAction(scope)
+  // Approve inline (Client Credentials + RFC 8693 Token Exchange), then
+  // automatically retry the same request — "ask → approve → try again" as
+  // one flow, not a second manual step.
+  async function handleInlineApprove(assistantMessageId: string, originalContent: string) {
+    await api.approveAgentAction()
     await refreshMe()
-    updateMessage(assistantMessageId, { pendingApprovalScope: null, content: "" })
+    updateMessage(assistantMessageId, { needsApproval: false, content: "" })
     await runTurn(originalContent, assistantMessageId)
   }
 

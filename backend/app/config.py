@@ -18,35 +18,42 @@ class Settings(BaseSettings):
     oidc_post_logout_redirect_uri: str | None = Field(default=None)
     oidc_scopes: str = Field(default="openid profile email")
 
-    # Agent identity — Client Credentials + RFC 8693 Token Exchange
+    # Agent identity — Client Credentials + RFC 8693 Token Exchange. This
+    # service knows nothing about todos:read/todos:write or any other
+    # downstream action-specific scope — that's entirely the Task Agent's
+    # concern once it holds a delegation credential and performs its own
+    # exchange. This service's only job is: prove its own identity, then
+    # combine that with the user's session into a delegation credential
+    # addressed to whichever agent it's decided to talk to.
+
+    # Step 1 (Client Credentials): the Chat Agent authenticates as itself —
+    # "I am the orchestration agent." Which PingOne resource owns this
+    # scope determines the resulting token's `aud`, which should be this
+    # service's own URL (app_base_url) — same "audience comes from the
+    # scope's resource" pattern as every other scope in this app.
     agent_client_id: str | None = Field(default=None)
     agent_client_secret: str | None = Field(default=None)
-    # Scope requested for the agent's own actor token (step 1, Client
-    # Credentials) — what the agent can do *as itself*.
-    agent_scopes: str | None = Field(default=None)
+    agent_own_scope: str = Field(default="agent:orchestration")
 
-    # Expected `aud` claim on the delegated token /api/invoke will accept —
-    # this is what makes inbound auth actually mean something: a token
-    # that's valid for some *other* purpose (like the user's raw session
-    # token) must be rejected because its audience isn't the agent. Falls
-    # back to agent_client_id, which is what PingOne populates `aud` with
-    # for a token minted against a custom resource owned by the agent app.
+    # Step 2 (Token Exchange): combines the user's session token with an
+    # actor token into one delegation credential, always scoped
+    # generically "I'm delegating a task" — never the specific action
+    # (todos:read, todos:write, or anything else), since this service
+    # doesn't decide that. A DIFFERENT PingOne worker app from the one
+    # above — the app authorized to actually perform Token Exchange isn't
+    # necessarily the same app that proves the agent's own identity in
+    # step 1. Which resource owns this scope determines the resulting
+    # token's `aud`, which should be the target agent's own URL
+    # (task_agent_url below).
+    agent_delegation_client_id: str | None = Field(default=None)
+    agent_delegation_client_secret: str | None = Field(default=None)
+    agent_delegation_scope: str = Field(default="agent:delegation")
+
+    # Expected `aud` claim on a token /api/invoke verifies as addressed TO
+    # this service itself (not the delegation token above, which is
+    # addressed to the Task Agent and verified against task_agent_url
+    # instead — see app/routes/invoke.py). Falls back to agent_client_id.
     agent_expected_audience: str | None = Field(default=None)
-
-    # Per-action delegation scopes (step 2, Token Exchange) — requested
-    # fresh, with exactly one of these, the first time a given action is
-    # needed, not a single blanket scope up front. Must match whatever scope
-    # strings are actually defined on the PingOne resource, and must match
-    # task-agent/.env's copies of the same two values exactly (it
-    # independently checks the granted scope, not just identity).
-    todos_read_scope: str = Field(default="todos:read")
-    todos_write_scope: str = Field(default="todos:write")
-
-    @property
-    def allowed_delegation_scopes(self) -> set[str]:
-        """The only scopes /api/auth/agent-token will ever request token
-        exchange for — never an arbitrary client-supplied string."""
-        return {self.todos_read_scope, self.todos_write_scope}
 
     @property
     def resolved_expected_audience(self) -> str | None:
@@ -72,7 +79,13 @@ class Settings(BaseSettings):
 
     @property
     def agent_configured(self) -> bool:
-        return bool(self.agent_client_id and self.agent_client_secret and self.session_secret)
+        return bool(
+            self.agent_client_id
+            and self.agent_client_secret
+            and self.agent_delegation_client_id
+            and self.agent_delegation_client_secret
+            and self.session_secret
+        )
 
 
 @lru_cache

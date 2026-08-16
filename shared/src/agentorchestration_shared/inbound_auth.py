@@ -37,11 +37,20 @@ class InboundAuthError(Exception):
 @dataclass
 class VerifiedIdentity:
     sub: str | None
-    client_id: str | None
+    client_id: str | None  # whichever client authenticated THIS request (e.g. performed a Token Exchange) — a mechanical detail, not necessarily "the agent"
     actor_sub: str | None  # RFC 8693 `act.sub`, if the issuer populates it
     scope: str | None  # raw `scope` claim, space-delimited per RFC 6749 §3.3
     email: str | None = None  # `email` or `preferred_username`, if the resource maps one onto the token
     aud: str | None = None  # the specific audience value this token was verified against
+    # PingOne-populated custom claim, propagated from the *actor* token used
+    # in whatever Token Exchange produced this token — i.e. "which agent is
+    # actually delegating," as opposed to `client_id` above (which app
+    # happened to perform the exchange call). This is what per-agent policy
+    # ACLs (task-agent/app/policy.py, mcp-todos-server/app/policy.py) should
+    # check identity against. Confirmed present on a real exchanged token
+    # 2026-08-16 — not present on every token shape (e.g. a plain Client
+    # Credentials actor token has no reason to carry it), so treat as optional.
+    agent_client_id: str | None = None
 
     def has_scope(self, required: str) -> bool:
         return required in (self.scope or "").split()
@@ -119,4 +128,5 @@ async def verify_bearer_token(token: str, *, discovery_url: str, expected_audien
         scope=claims.get("scope"),
         email=claims.get("email") or claims.get("preferred_username"),
         aud=expected_audience,
+        agent_client_id=claims.get("agent_client_id"),
     )

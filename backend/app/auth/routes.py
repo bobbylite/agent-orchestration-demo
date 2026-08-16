@@ -24,7 +24,6 @@ from app.auth.session import (
     set_sealed_cookie,
 )
 from app.config import Settings, get_settings
-from app.models import AgentTokenRequest
 from app.telemetry import with_span
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -170,97 +169,88 @@ _EXCHANGED_COOKIE_MAX_AGE = 8 * 60 * 60  # matches SESSION_COOKIE; individual
 async def agent_token(
     request: Request,
     response: Response,
-    body: AgentTokenRequest,
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    """Two-step RFC 8693 delegation, both steps scoped generically — this
+    service doesn't know or care which specific downstream action
+    (todos:read, todos:write, or anything else) is intended; that's the
+    Task Agent's job once it holds this credential and performs its own
+    exchange. This endpoint's only job: prove the Chat Agent's own
+    identity (Client Credentials, `agent_own_scope`, audience = this
+    service's own URL), then combine that with the user's session into one
+    delegation credential (Token Exchange, `agent_delegation_scope`,
+    audience = the Task Agent's URL).
+    """
     if not settings.agent_configured:
         raise HTTPException(status_code=400, detail="Agent credentials are not configured")
-
-    if body.scope not in settings.allowed_delegation_scopes:
-        # Never request token exchange for an arbitrary client-supplied
-        # scope string — only the specific, known delegation scopes this
-        # deployment actually understands.
-        raise HTTPException(status_code=400, detail=f"Unknown delegation scope: {body.scope!r}")
 
     session = read_cookie(request, SESSION_COOKIE, settings)
     if not session or not session.get("access_token"):
         raise HTTPException(status_code=401, detail="Sign in with PingOne first")
 
-    with with_span(
-        "agent.authenticate",
-        {"identity.sub": session.get("sub", ""), "oauth.requested_scope": body.scope},
-    ):
+    with with_span("agent.authenticate", {"identity.sub": session.get("sub", "")}):
         metadata = await oidc.get_metadata(settings)
 
         with with_span("agent.client_credentials") as cc_span:
             try:
-                actor_tokens = await client_credentials_grant(metadata.token_endpoint, settings)
+                actor_token = await client_credentials_grant(
+                    metadata.token_endpoint,
+                    client_id=settings.agent_client_id,
+                    client_secret=settings.agent_client_secret,
+                    scope=settings.agent_own_scope,
+                )
             except httpx.HTTPStatusError as exc:
                 raise HTTPException(
                     status_code=502,
                     detail=f"PingOne rejected the agent's Client Credentials grant: {_pingone_error_detail(exc)}",
                 ) from exc
             cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
-            cc_span.set_attribute("oauth.scope", settings.agent_scopes or "")
-
-        set_sealed_cookie(
-            response,
-            AGENT_TOKEN_COOKIE,
-            {
-                "client_id": settings.agent_client_id,
-                "access_token": actor_tokens["access_token"],
-                "issued_at": time.time(),
-            },
-            settings,
-            max_age=actor_tokens.get("expires_in", 3600),
-        )
+            cc_span.set_attribute("oauth.scope", settings.agent_own_scope)
 
         with with_span("agent.token_exchange") as te_span:
             try:
-                exchanged = await token_exchange(
+                # Deliberately a DIFFERENT PingOne worker app from the one
+                # above — the app authorized to perform Token Exchange
+                # isn't necessarily the same one that proves the agent's
+                # own identity in step 1.
+                delegated = await token_exchange(
                     metadata.token_endpoint,
-                    settings,
+                    client_id=settings.agent_delegation_client_id,
+                    client_secret=settings.agent_delegation_client_secret,
                     subject_token=session["access_token"],
-                    actor_token=actor_tokens["access_token"],
-                    scope=body.scope,
+                    actor_token=actor_token["access_token"],
+                    scope=settings.agent_delegation_scope,
                 )
             except httpx.HTTPStatusError as exc:
                 raise HTTPException(
                     status_code=502,
-                    detail=f"PingOne rejected the Token Exchange request for scope {body.scope!r}: "
-                    f"{_pingone_error_detail(exc)}",
+                    detail=f"PingOne rejected the Token Exchange request: {_pingone_error_detail(exc)}",
                 ) from exc
             te_span.set_attribute("identity.sub", session.get("sub", ""))
-            te_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
-            te_span.set_attribute("oauth.scope", body.scope)
+            te_span.set_attribute("identity.agent_client_id", settings.agent_delegation_client_id or "")
+            te_span.set_attribute("oauth.scope", settings.agent_delegation_scope)
 
-        # One cookie, keyed by scope — each entry from its own independent
-        # exchange call, requested the first time an action needing it comes
-        # up, not all up front. Existing scopes (from earlier approvals)
-        # are preserved, not overwritten.
-        exchanged_by_scope = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings) or {}
-        exchanged_by_scope[body.scope] = {
-            "sub": session.get("sub"),
-            "client_id": settings.agent_client_id,
-            "access_token": exchanged["access_token"],
-            "scope": body.scope,
-            "issued_at": time.time(),
-        }
         set_sealed_cookie(
             response,
             EXCHANGED_TOKEN_COOKIE,
-            exchanged_by_scope,
+            {
+                "sub": session.get("sub"),
+                "client_id": settings.agent_delegation_client_id,
+                "access_token": delegated["access_token"],
+                "scope": settings.agent_delegation_scope,
+                "issued_at": time.time(),
+            },
             settings,
             max_age=_EXCHANGED_COOKIE_MAX_AGE,
         )
 
-    return {"granted_scope": body.scope, "exchanged_scopes": list(exchanged_by_scope.keys())}
+    return {"delegated": True}
 
 
 @router.get("/me")
 async def me(request: Request, settings: Settings = Depends(get_settings)) -> dict:
     session = read_cookie(request, SESSION_COOKIE, settings)
-    exchanged_by_scope = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings) or {}
+    delegated = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
     return {
         "oidc_enabled": settings.oidc_configured,
         "agent_enabled": settings.agent_configured,
@@ -268,5 +258,5 @@ async def me(request: Request, settings: Settings = Depends(get_settings)) -> di
         "sub": (session or {}).get("sub"),
         "email": (session or {}).get("email"),
         "name": (session or {}).get("name"),
-        "exchanged_scopes": list(exchanged_by_scope.keys()),
+        "agent_delegated": bool(delegated),
     }

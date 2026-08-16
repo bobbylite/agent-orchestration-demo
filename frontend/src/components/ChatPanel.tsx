@@ -7,10 +7,10 @@ export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string
-  /** Set to the required scope (e.g. "todos:write") when the agent tried to
-   * act on the user's behalf without a delegated token for it — renders an
-   * inline "Approve Agent Action" prompt for that specific scope. */
-  pendingApprovalScope?: string | null
+  /** True when the agent tried to act on the user's behalf without a
+   * delegation credential yet — renders an inline "Approve Agent Action"
+   * prompt. */
+  needsApproval?: boolean
   /** For assistant messages: the user text that produced this turn, so a
    * successful inline approval can automatically retry it. */
   sourceUserContent?: string
@@ -21,7 +21,7 @@ interface Props {
   canSend: boolean
   disabledReason: string | null
   onSend: (message: string) => void
-  onInlineApprove: (assistantMessageId: string, originalContent: string, scope: string) => Promise<void>
+  onInlineApprove: (assistantMessageId: string, originalContent: string) => Promise<void>
 }
 
 export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineApprove }: Props) {
@@ -83,11 +83,10 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                     message.content
                   )}
                 </div>
-                {message.pendingApprovalScope && (
+                {message.needsApproval && (
                   <div className="w-full max-w-[75%]">
                     <InlineAgentApprovalPrompt
-                      scope={message.pendingApprovalScope}
-                      onApprove={(scope) => onInlineApprove(message.id, message.sourceUserContent ?? "", scope)}
+                      onApprove={() => onInlineApprove(message.id, message.sourceUserContent ?? "")}
                     />
                   </div>
                 )}

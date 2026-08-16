@@ -50,7 +50,14 @@ def _record(tool: str, outcome: audit.Outcome, caller: VerifiedIdentity, *, deta
         outcome=outcome,
         on_behalf_of_sub=caller.sub,
         on_behalf_of_label=label,
-        agent_client_id=caller.client_id,
+        # `agent_client_id` (PingOne's custom claim, propagated from the
+        # actor token used in the exchange that produced this token) is
+        # "which agent is delegating" (task-agent's own identity) —
+        # `caller.client_id` is just whichever app performed THIS specific
+        # exchange call (TODOS_MCP_CLIENT_ID), not a meaningful agent
+        # identity for the audit log. Confirmed via a real PingOne token
+        # 2026-08-16; same distinction policy.check() below uses.
+        agent_client_id=caller.agent_client_id,
         agent_aud=caller.aud,
         agent_label=get_settings().agent_display_name,
         scope=caller.scope,
@@ -65,8 +72,10 @@ async def _authorize(tool_name: str) -> VerifiedIdentity:
     except InboundAuthError as exc:
         raise ToolError(f"Inbound auth rejected the token: {exc.reason}") from exc
 
-    if not policy.check(tool_name, caller.client_id, caller.scope):
-        detail = f"agent '{caller.client_id}' (granted scope: {caller.scope!r}) is not authorized to use '{tool_name}'"
+    if not policy.check(tool_name, caller.agent_client_id, caller.scope):
+        detail = (
+            f"agent '{caller.agent_client_id}' (granted scope: {caller.scope!r}) is not authorized to use '{tool_name}'"
+        )
         _record(tool_name, "denied", caller, detail=detail)
         raise ToolError(detail)
 
@@ -91,7 +100,7 @@ async def add_todo(text: str) -> dict:
         created_by="agent",
         creator_sub=caller.sub,
         creator_label=label,
-        agent_client_id=caller.client_id,
+        agent_client_id=caller.agent_client_id,
     )
 
 

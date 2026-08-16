@@ -16,13 +16,12 @@ from app.telemetry import with_span
 
 router = APIRouter(prefix="/api", tags=["invoke"])
 
-# Maps the LangChain tool name (what astream_events reports) to which scope
-# it needs — used to turn a NEEDS_AGENT_AUTH_MARKER sentinel into a specific
-# `auth_required` SSE event the frontend can act on without parsing prose.
-_TOOL_REQUIRED_SCOPE_SETTING = {
-    "ask_task_agent_read": "todos_read_scope",
-    "ask_task_agent_write": "todos_write_scope",
-}
+# Tool names that delegate to the Task Agent — used to turn a
+# NEEDS_AGENT_AUTH_MARKER sentinel into a deterministic `auth_required` SSE
+# event the frontend can act on without parsing prose. There's only one
+# delegation credential now (not one per action), so this is just "was it
+# a delegating tool call", not a lookup into a per-scope setting.
+_DELEGATING_TOOLS = {"ask_task_agent_read", "ask_task_agent_write"}
 
 
 def _extract_text(content: Any) -> str:
@@ -52,32 +51,44 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
 
     sub = session.get("sub")
     agent_client_id: str | None = None
-    verified_bearer_tokens: dict[str, str] = {}  # scope -> access_token
+    delegated_token: str | None = None
 
-    exchanged_by_scope = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings) or {}
-    for scope, entry in exchanged_by_scope.items():
-        candidate_token = entry.get("access_token")
-        if not candidate_token:
-            continue
-        with with_span("inbound_auth.verify", {"oauth.scope": scope}) as auth_span:
+    delegated_entry = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
+    candidate_token = (delegated_entry or {}).get("access_token")
+    if candidate_token:
+        with with_span("inbound_auth.verify") as auth_span:
             try:
-                identity = await verify_inbound_token(candidate_token, settings)
+                # This token is a delegation credential addressed to the
+                # Task Agent (audience = its own URL), not to this service
+                # — the Chat Agent no longer holds a todos-scoped token of
+                # its own to verify against its own audience. See
+                # CLAUDE.md (2026-08-16 redesign, in progress).
+                identity = await verify_inbound_token(
+                    candidate_token, settings, expected_audience=settings.task_agent_url
+                )
             except InboundAuthError as exc:
                 # Present but no longer valid (expired, tampered, wrong
-                # audience/scope) — degrade gracefully: this one scope just
-                # isn't usable, rather than failing the whole request.
-                # ask_task_agent_* will surface the need to re-approve if the
-                # user asks for something that actually needs it.
+                # audience/scope) — degrade gracefully: just treat it as
+                # not delegated yet, rather than failing the whole request.
+                # ask_task_agent_* will surface the need to re-approve if
+                # the user asks for something that actually needs it.
                 auth_span.set_attribute("inbound_auth.failure_reason", exc.reason)
                 auth_span.set_status(Status(StatusCode.ERROR, exc.reason))
-                continue
-            auth_span.set_attribute("identity.sub", identity.sub or "")
-            auth_span.set_attribute("identity.agent_client_id", identity.client_id or "")
-            if identity.actor_sub:
-                auth_span.set_attribute("identity.actor_sub", identity.actor_sub)
-            sub = identity.sub or sub
-            agent_client_id = identity.client_id
-            verified_bearer_tokens[scope] = candidate_token
+            else:
+                auth_span.set_attribute("identity.sub", identity.sub or "")
+                # `agent_client_id` (PingOne's custom claim, propagated from
+                # the actor token used in the exchange that produced this
+                # token) is "which agent is delegating" — `client_id` is
+                # just whichever app performed the exchange call, a
+                # mechanical detail. Confirmed via a real PingOne token
+                # 2026-08-16; same distinction task-agent's policy ACL uses.
+                auth_span.set_attribute("identity.agent_client_id", identity.agent_client_id or "")
+                auth_span.set_attribute("identity.exchange_client_id", identity.client_id or "")
+                if identity.actor_sub:
+                    auth_span.set_attribute("identity.actor_sub", identity.actor_sub)
+                sub = identity.sub or sub
+                agent_client_id = identity.agent_client_id
+                delegated_token = candidate_token
 
     graph = request.app.state.graph
 
@@ -85,10 +96,9 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
         with with_span(
             "agent.invoke",
             {
-                "identity.token_source": "exchanged" if verified_bearer_tokens else "session",
+                "identity.token_source": "exchanged" if delegated_token else "session",
                 "identity.sub": sub or "",
                 "identity.agent_client_id": agent_client_id or "",
-                "identity.granted_scopes": " ".join(sorted(verified_bearer_tokens)),
                 "agent.thread_id": body.thread_id,
             },
         ) as span:
@@ -99,14 +109,12 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                     config={
                         "configurable": {
                             "thread_id": body.thread_id,
-                            # Keyed by scope; empty for scopes not yet approved —
-                            # ask_task_agent_* (app/agent/tools.py) treats a
-                            # missing entry as "needs approval for this scope"
-                            # rather than attempting the A2A call with nothing.
-                            "bearer_tokens": verified_bearer_tokens,
+                            # None if not yet approved — ask_task_agent_*
+                            # (app/agent/tools.py) treats a missing token as
+                            # "needs approval" rather than attempting the
+                            # A2A call with nothing.
+                            "delegated_token": delegated_token,
                             "task_agent_url": settings.task_agent_url,
-                            "todos_read_scope": settings.todos_read_scope,
-                            "todos_write_scope": settings.todos_write_scope,
                             "caller_sub": sub or "",
                             "caller_agent_client_id": agent_client_id or "",
                         }
@@ -117,14 +125,12 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                         output = event["data"].get("output")
                         content = getattr(output, "content", "")
                         tool_name = event.get("name")
-                        scope_setting = _TOOL_REQUIRED_SCOPE_SETTING.get(tool_name)
                         if (
                             isinstance(content, str)
                             and content.startswith(NEEDS_AGENT_AUTH_MARKER)
-                            and scope_setting
+                            and tool_name in _DELEGATING_TOOLS
                         ):
-                            required_scope = getattr(settings, scope_setting)
-                            yield {"event": "auth_required", "data": json.dumps({"scope": required_scope})}
+                            yield {"event": "auth_required", "data": json.dumps({})}
                         continue
                     if event["event"] != "on_chat_model_stream":
                         continue

@@ -68,26 +68,45 @@ class TaskAgentExecutor(AgentExecutor):
             )
             return
 
+        if not identity.has_scope(self.settings.expected_delegation_scope):
+            await task_updater.failed(
+                message=new_text_message(
+                    f"Inbound auth rejected the token: missing required scope "
+                    f"{self.settings.expected_delegation_scope!r} (got {identity.scope!r})"
+                )
+            )
+            return
+
         await task_updater.start_work(
             message=new_text_message(
-                f"Verified caller (sub={identity.sub}, client_id={identity.client_id}, "
-                f"scope={identity.scope})"
+                f"Verified caller (sub={identity.sub}, agent_client_id={identity.agent_client_id}, "
+                f"client_id={identity.client_id}, scope={identity.scope})"
             )
         )
 
-        # Rebuilt per call (not cached at startup) so the MCP connection to
-        # mcp-todos-server carries *this* request's freshly-verified bearer
-        # token — the same "verify/act fresh every time" rule as inbound
-        # auth itself, not a fixed service-level credential. See
-        # CLAUDE.md "Identity propagation across the A2A hop".
-        graph = await build_graph(self.settings, bearer_token=token)
+        # Rebuilt per call (not cached at startup) — see CLAUDE.md
+        # "Identity propagation across the A2A hop". The graph no longer
+        # forwards `token` to mcp-todos-server as-is: it's threaded through
+        # as `delegation_token`, used as the *subject* token for this
+        # service's own RFC 8693 Token Exchange, performed fresh per tool
+        # call once the graph knows which MCP capability it actually needs
+        # (see app/graph.py's _scoped_tool_call).
+        graph = await build_graph(self.settings)
         query = get_message_text(context.message)
         result = await graph.ainvoke(
             {"messages": [("human", query)]},
             config={
                 "configurable": {
-                    "client_id": identity.client_id,
+                    # `agent_client_id` (not `client_id`) — the custom claim
+                    # PingOne propagates from the *actor* token used in the
+                    # exchange that produced this token, i.e. which agent is
+                    # actually delegating. `client_id` here is just whichever
+                    # app performed the exchange call — not what
+                    # policy.py's ACL should check. Confirmed via a real
+                    # PingOne token 2026-08-16.
+                    "client_id": identity.agent_client_id,
                     "granted_scope": identity.scope,
+                    "delegation_token": token,
                     "thread_id": task.context_id,
                 }
             },

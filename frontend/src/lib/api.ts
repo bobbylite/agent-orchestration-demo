@@ -11,10 +11,10 @@ export interface MeResponse {
   sub: string | null
   email: string | null
   name: string | null
-  /** Delegation scopes already approved this session, e.g. ["todos:read"].
-   * Approving "todos:read" does not imply "todos:write" — each is its own
-   * RFC 8693 Token Exchange, requested the first time it's actually needed. */
-  exchanged_scopes: string[]
+  /** Whether the agent already holds a delegation credential for the Task
+   * Agent this session (Client Credentials + RFC 8693 Token Exchange) — one
+   * generic credential, not one per action; see CLAUDE.md 2026-08-16. */
+  agent_delegated: boolean
 }
 
 export interface TelemetrySpan {
@@ -42,15 +42,11 @@ export const api = {
   getConfig: () => getJson<ConfigResponse>("/api/config"),
   getMe: () => getJson<MeResponse>("/api/auth/me"),
   getTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/api/telemetry"),
-  /** Approve one specific delegation scope (e.g. "todos:read") — does RFC
-   * 8693 Token Exchange for exactly that scope. Approving one scope never
-   * grants another; each is requested and approved independently. */
-  approveAgentAction: (scope: string) =>
-    getJson<{ granted_scope: string; exchanged_scopes: string[] }>("/api/auth/agent-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scope }),
-    }),
+  /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
+   * Token Exchange, scoped generically (not per todos:read/write action;
+   * the Task Agent decides that itself once it holds this credential). */
+  approveAgentAction: () =>
+    getJson<{ delegated: boolean }>("/api/auth/agent-token", { method: "POST" }),
   loginUrl: "/api/auth/login",
   logoutUrl: "/api/auth/logout",
 }
@@ -59,12 +55,11 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
-  /** The agent tried to act on the user's behalf without a delegated token
-   * for this specific scope. Not an error — the turn continues normally and
-   * the model explains it in its own words; this is the deterministic
-   * signal for rendering an inline "Approve Agent Action" prompt for that
-   * scope specifically. */
-  onAuthRequired?: (scope: string) => void
+  /** The agent tried to act on the user's behalf without a delegation
+   * credential yet. Not an error — the turn continues normally and the
+   * model explains it in its own words; this is the deterministic signal
+   * for rendering an inline "Approve Agent Action" prompt. */
+  onAuthRequired?: () => void
   onRawEvent?: (event: string, data: string) => void
 }
 
@@ -117,7 +112,7 @@ export async function streamInvoke(
       if (eventName === "token") handlers.onToken(parsed.text)
       else if (eventName === "done") handlers.onDone()
       else if (eventName === "error") handlers.onError(parsed.message)
-      else if (eventName === "auth_required") handlers.onAuthRequired?.(parsed.scope)
+      else if (eventName === "auth_required") handlers.onAuthRequired?.()
     }
   }
 }

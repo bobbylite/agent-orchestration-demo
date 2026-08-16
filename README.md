@@ -1,19 +1,39 @@
 # Agent Orchestration Console (LangGraph edition)
 
-A PingOne-authenticated chat console for a LangGraph agent — a Python/FastAPI +
-React rebuild of [digital-assistant-demo](https://github.com/bobbylite/digital-assistant-demo),
-with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
+A production-shaped **multi-agent system**, not a demo dressed up to look like one:
+two independent [LangGraph](https://www.langchain.com/langgraph) agents, running as
+separate processes, talking to each other over the real
+[A2A protocol](https://a2a-protocol.org) — with a chained OAuth 2.0 delegation model
+that mirrors AWS Bedrock AgentCore's inbound-auth pattern, a live
+LLM-as-judge evaluator-optimizer loop watching every answer, real
+[MCP](https://modelcontextprotocol.io) tool calls, and every credential-bearing hop
+narrated live on an animated architecture diagram via OpenTelemetry. A
+Python/FastAPI + React rebuild of
+[digital-assistant-demo](https://github.com/bobbylite/digital-assistant-demo), with
+the AWS Bedrock AgentCore backend replaced by local LangGraph graphs.
 
-- **Sign in with PingOne** — OIDC Authorization Code + PKCE (S256), ID token
-  verified against PingOne's JWKS, session sealed into an encrypted
-  (JWE/A256GCM) `HttpOnly` cookie. Sufficient on its own for plain chat.
-- **Chained RFC 8693 delegation — four exchanges, not one pass-through
-  token** — the Chat Agent proves its own identity (OAuth Client
-  Credentials) then combines that with the user's session token via
-  [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693) into a
-  *generic* delegation credential addressed to the Task Agent — it never
-  requests `todos:read`/`todos:write` itself. The Task Agent, in turn,
-  proves *its own* identity and performs its *own* Token Exchange —
+Nothing here is simulated for effect: no agent trusts the previous hop's say-so, no
+token is forwarded unchanged, and no "judge" node is a rubber stamp — each of those
+claims is independently, cryptographically, or structurally enforced, and this
+README walks through exactly how.
+
+## Highlights
+
+- **Real multi-agent orchestration — two processes, one real wire protocol.**
+  The Chat Agent and Task Agent are genuinely separate LangGraph graphs in
+  genuinely separate OS processes, each with its own PingOne identity,
+  exchanging Agent Cards and task-based JSON-RPC over the actual A2A
+  protocol — not an in-process function call wearing an agent costume. The
+  Chat Agent decides, via real tool-calling, whether a request needs a
+  specialist; the Task Agent independently re-verifies everything it
+  receives before touching its own graph or a real MCP server.
+- **Chained RFC 8693 delegation — four token exchanges, six PingOne
+  identities, zero pass-through tokens.** The Chat Agent proves its own
+  identity (OAuth Client Credentials) then combines that with the user's
+  session token via [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
+  into a *generic* delegation credential addressed to the Task Agent — it
+  never requests `todos:read`/`todos:write` itself. The Task Agent, in
+  turn, proves *its own* identity and performs its *own* Token Exchange —
   combining the credential it just received with its own identity — scoped
   to exactly the todos capability the specific tool call needs, freshly,
   every call. That's what's actually calling the todos MCP server: a
@@ -22,6 +42,17 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   Action" per chat session; which specific capability gets requested is
   decided downstream, per action, with nothing cached across different
   scopes ("step-up" scoping for free).
+- **An evaluator-optimizer judge, watching every answer.** After the Task
+  Agent proposes an answer, a second LLM call — with its own structured
+  `pass`/`fail` contract (Pydantic + `with_structured_output`), and
+  swappable between Claude and Groq's free tier with one `.env` line —
+  grades it against what was actually delegated and loops back with
+  concrete feedback on a fail, capped at a configurable number of
+  retries, and fails *open* (never blocks a real answer) if the judge
+  call itself breaks. It's correctly a graph node, not a gate — a
+  deliberate, documented departure from how every auth check in this repo
+  works, because a quality judgment and an authorization decision are not
+  the same kind of thing.
 - **Inbound auth (AgentCore-style) at every hop** — plain chat only needs
   the signed-in session (it never touches a protected resource). The
   moment the agent needs to act *on the user's behalf*, each hop in the
@@ -31,21 +62,18 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
   for something the agent doesn't yet have a delegation credential for,
   the chat explains it and offers an inline "Approve Agent Action" prompt,
   then automatically retries.
-- **OpenTelemetry** — every credential-bearing operation (login, logout,
-  agent auth, token exchange, inbound-auth verification, agent invocation)
-  emits a span. A redaction filter drops any attribute whose key looks like
-  `token`, `secret`, `password`, or `authoriz*` before it's ever stored — the
-  token itself never appears on a span.
-- **LangGraph agent, real A2A delegation** — the Chat Agent reasons about
-  whether a request needs a specialist (e.g. anything about a todo list)
-  and, if so, delegates to a separate **Task Agent** process over the actual
-  [A2A protocol](https://a2a-protocol.org) (Agent Cards, task-based
-  JSON-RPC, not an in-process function call). The Task Agent independently
-  re-verifies the credential it receives — no implicit trust between
-  services — then reasons about which tool to use against a real
-  [MCP](https://modelcontextprotocol.io) server, minting its own further
-  delegated token for that specific call (see "Chained RFC 8693
-  delegation" above), gated by its own policy ACL.
+- **OpenTelemetry across every agent, replayed on a live architecture
+  diagram.** Both the Chat Agent and the Task Agent run their own
+  `RecordingSpanProcessor` — every credential-bearing operation (login,
+  agent auth, token exchange, inbound-auth verification, agent invocation,
+  and now each judge attempt's pass/fail verdict) emits a real span, with a
+  redaction filter dropping any attribute whose key looks like `token`,
+  `secret`, `password`, or `authoriz*` before it's ever stored, so a
+  credential can never land on a span even by accident. The frontend polls
+  both services and replays the spans live onto an animated
+  [React Flow](https://reactflow.dev) diagram of the actual identity/data
+  flow — watch a single request cross six PingOne identities and two agent
+  processes, node by node, as it happens.
 - **The MCP server has its own PingOne-gated UI and an OBO audit log** —
   `mcp-todos-server/` is no longer a bare, unauthenticated tool server: it
   independently re-verifies the token the Task Agent mints for it (its own
@@ -65,7 +93,8 @@ with the AWS Bedrock AgentCore backend replaced by a local LangGraph graph.
 ```
 backend/                     Chat Agent — FastAPI + LangGraph + OIDC + OpenTelemetry (Python 3.14, uv)
 frontend/                    React 19 + Vite 8 + Tailwind v4 (Node >=22.12)
-task-agent/                  Specialist Agent — separate process, own A2A server
+task-agent/                  Specialist Agent — separate process, own A2A server, own
+                              OpenTelemetry, own evaluator-optimizer judge node
 mcp-todos-server/            MCP server (mocked todos tool) + its own PingOne-gated UI's API + OBO audit log
 mcp-todos-server/frontend/   React 19 + Vite 8 + Tailwind v4 — todo list (human/agent tagged) + audit log
 shared/                      Inbound-auth verification shared by backend + task-agent + mcp-todos-server
@@ -297,13 +326,21 @@ configuration.
   `client_credentials_grant()`/`token_exchange()`, deliberately duplicated
   from `backend/app/auth/agent_auth.py`'s identical shape (not shared —
   `shared/` is for inbound-auth verification only).
+- `task-agent/app/telemetry.py` — its own `RecordingSpanProcessor` ring
+  buffer + redaction filter, the same shape as `backend/app/telemetry.py`
+  (also deliberately duplicated, not shared), exposed at `GET /telemetry`.
+  Every span from either service carries a `service` field so the
+  frontend can tell them apart when a span *name* recurs across processes
+  (e.g. `inbound_auth.verify` fires on both sides).
 - `task-agent/app/agent_executor.py` — the Task Agent's A2A `AgentExecutor`:
   verifies the incoming delegation token (audience = its own URL, scope
   must contain `agent:delegation`) before touching its own graph
-  (`task-agent/app/graph.py`). Threads `identity.agent_client_id` (not
-  `identity.client_id`) into the policy check, and the raw verified token
-  itself as `delegation_token` — used downstream as the *subject* token
-  for this service's own further exchange.
+  (`task-agent/app/graph.py`), each step its own span
+  (`inbound_auth.verify`, `a2a.task_execute`). Threads
+  `identity.agent_client_id` (not `identity.client_id`) into the policy
+  check, and the raw verified token itself as `delegation_token` — used
+  downstream as the *subject* token for this service's own further
+  exchange.
 - `task-agent/app/graph.py` — MCP tools fetched once per task for schema
   only (no auth needed for `tools/list`); the real work is in
   `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
@@ -312,6 +349,11 @@ configuration.
   `todos:read` or `todos:write`, then a freshly-authorized MCP connection
   built just for that one call. This is what gives step-up scoping for
   free — nothing about which scope was granted is cached across calls.
+  The same file also builds the `judge` node — a `JudgeVerdict` Pydantic
+  contract, on `ChatAnthropic` or `ChatGroq` depending on `JUDGE_PROVIDER`
+  — that grades `task_assistant`'s proposed answer against the delegated
+  request and loops back on `fail`, emitting one `judge.evaluate` span per
+  attempt.
 - `task-agent/app/policy.py` — identity-ACL only now (not scope — the
   inbound token's scope is always the generic `agent:delegation`; real
   enforcement of *which* action is allowed is whether the exchange above
@@ -374,10 +416,16 @@ third tool or a third agent) — the short version:
   panel (`/api/config` + `/api/settings`) isn't built yet — `app/config.py`
   is structured so adding a writable-at-runtime layer over `Settings` is a
   contained change.
-- **Cross-service telemetry**: `task-agent/` doesn't have its own
-  `RecordingSpanProcessor`/`/telemetry` endpoint yet, so its internal steps
-  aren't visible in the frontend's Telemetry panel (only the Chat Agent's
-  `agent.a2a_delegate` span, which wraps the whole round-trip, is).
-  `mcp-todos-server/`'s audit log (`app/audit.py`) is a separate,
-  purpose-built mechanism for a different job — attributing OBO actions to
-  a human, not general span tracing — not a stand-in for this.
+- **Cross-service telemetry for `mcp-todos-server/`**: both the Chat Agent
+  and the Task Agent have their own `RecordingSpanProcessor`/`/telemetry`
+  endpoint and show up live in the frontend's Telemetry panel and
+  architecture diagram, but `mcp-todos-server/` doesn't yet — its own MCP
+  tool calls and the RFC 8693 exchange that authorizes them aren't
+  instrumented. `task-agent/app/telemetry.py` is the copy-pasteable
+  pattern (each service's copy is deliberately independent, not shared —
+  give a new copy its own `service.name` and stamp it onto every span; see
+  `CLAUDE.md`'s note on why span *names* alone aren't enough to
+  disambiguate once a second service reuses one). `mcp-todos-server/`'s
+  audit log (`app/audit.py`) is a separate, purpose-built mechanism for a
+  different job — attributing OBO actions to a human, not general span
+  tracing — not a stand-in for this.

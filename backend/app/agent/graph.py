@@ -16,8 +16,11 @@ from __future__ import annotations
 from typing import Annotated, TypedDict
 
 from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
+from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -30,23 +33,58 @@ from app.config import Settings
 
 _TOOLS = [ask_task_agent_read, ask_task_agent_write]
 
+_DEFAULT_OPENAI_MODEL = "gpt-4.1"
+_DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
 
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
 
-def _build_assistant_node(settings: Settings):
+def resolved_model_label(settings: Settings) -> str:
+    """The actual model name the `assistant` node will run, given
+    settings.model_provider — same resolution _build_assistant_llm uses,
+    exposed separately so routes/invoke.py can stamp it onto the
+    agent.invoke span without constructing a whole LLM client just to read
+    a string."""
+    if settings.model_provider == "openai":
+        return settings.model_id or _DEFAULT_OPENAI_MODEL
+    if settings.model_provider == "groq":
+        return settings.groq_model or _DEFAULT_GROQ_MODEL
+    return settings.agent_model
+
+
+def _build_assistant_llm(settings: Settings) -> BaseChatModel:
+    """MODEL_PROVIDER picks which LLM the `assistant` node itself reasons
+    with — entirely separate from PingOne identity/delegation (unaffected
+    either way). "openai"/"groq" are genuine alternatives here, not just
+    for the Task Agent's judge (see task-agent/app/graph.py's
+    _build_judge_llm/_build_agent_llm, which follow this identical shape)."""
+    if settings.model_provider == "openai":
+        return ChatOpenAI(
+            model=settings.model_id or _DEFAULT_OPENAI_MODEL,
+            api_key=SecretStr(settings.openai_api_key or ""),
+        )
+    if settings.model_provider == "groq":
+        return ChatGroq(
+            model=settings.groq_model or _DEFAULT_GROQ_MODEL,
+            api_key=SecretStr(settings.groq_api_key or ""),
+        )
     # timeout/stop passed explicitly (at their real defaults) because
     # langchain-anthropic declares them as `Field(None, alias=...)` —
     # Pylance's pydantic plugin doesn't recognize that positional-default
     # form and flags them as missing-required otherwise. Harmless either
     # way; this just satisfies the type checker.
-    llm = ChatAnthropic(
+    return ChatAnthropic(
         model_name=settings.agent_model,
         api_key=SecretStr(settings.anthropic_api_key or ""),
         timeout=None,
         stop=None,
-    ).bind_tools(_TOOLS)
+    )
+
+
+def _build_assistant_node(settings: Settings):
+    llm = _build_assistant_llm(settings).bind_tools(_TOOLS)
 
     _system = SystemMessage(
         content=(

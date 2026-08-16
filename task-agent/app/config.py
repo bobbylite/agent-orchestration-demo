@@ -65,32 +65,49 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
 
+    # Which LLM provider task_assistant itself reasons with — same
+    # meaning/shape as backend/app/config.py's identical fields (nothing
+    # to do with this service's own PingOne identity/delegation chain
+    # above, which is unaffected either way). "anthropic" (default),
+    # "openai", or "groq" — each provider gets its own model-name field
+    # (agent_model / model_id / groq_model), not one shared field, so
+    # MODEL_ID and GROQ_MODEL can both stay set in .env without one
+    # becoming a landmine for the other when MODEL_PROVIDER is switched.
+    # groq_api_key below (also used by the judge, see below) is shared
+    # across both uses — same underlying Groq account either way.
+    model_provider: str = Field(default="anthropic")
+    openai_api_key: str | None = Field(default=None)
+    model_id: str | None = Field(default=None)  # used when model_provider="openai"
+
     # Judge node (app/graph.py) — evaluates task_assistant's proposed
     # answer against the request this service was actually delegated
     # (not the human's literal message, which this service never sees;
     # see CLAUDE.md). Needs no identity of its own — it never touches a
     # protected resource, just evaluates text already produced.
     judge_enabled: bool = Field(default=True)
-    # "anthropic" (default) or "groq" — the judge is a pure text-in/
-    # structured-verdict-out evaluation with no tool use of its own, so
-    # it's a natural place to run a cheaper/free provider instead of
-    # spending Anthropic tokens on it. Groq's free tier is genuinely free
-    # (rate-limited, not credit-metered) and its hosted Llama models
+    # "anthropic" (default), "groq", or "openai" — the judge is a pure
+    # text-in/structured-verdict-out evaluation with no tool use of its
+    # own, so it's a natural place to run a cheaper/free provider instead
+    # of spending Anthropic tokens on it. Groq's free tier is genuinely
+    # free (rate-limited, not credit-metered) and its hosted Llama models
     # support tool-calling, which is what `.with_structured_output()`
-    # needs under the hood.
+    # needs under the hood; "openai" reuses OPENAI_API_KEY/MODEL_ID above.
     judge_provider: str = Field(default="anthropic")
-    # Falls back to agent_model (if provider="anthropic") or a Groq default
-    # model (if provider="groq") when unset — see app/graph.py's
-    # _build_judge_node. Lets a cheaper/different model judge without
-    # forcing it.
+    # Falls back to agent_model (if provider="anthropic"), a Groq default
+    # model (if provider="groq"), or model_id/a default (if
+    # provider="openai") when unset — see app/graph.py's _build_judge_llm.
+    # Lets a cheaper/different model judge without forcing it.
     judge_model: str | None = Field(default=None)
     # Original attempt + this many retries before giving up and returning
     # the last answer anyway, rather than looping forever.
     judge_max_attempts: int = Field(default=2)
 
-    # Only needed when judge_provider="groq". Free API key from
-    # console.groq.com — no billing required for the free tier.
+    # Only needed when model_provider="groq" or judge_provider="groq". Free
+    # API key from console.groq.com — no billing required for the free tier.
     groq_api_key: str | None = Field(default=None)
+    # Model name for task_assistant when model_provider="groq" (the judge
+    # uses judge_model instead, with its own groq default — see above).
+    groq_model: str | None = Field(default=None)
 
     mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
 

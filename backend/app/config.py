@@ -62,9 +62,25 @@ class Settings(BaseSettings):
     # Session cookie encryption (JWE, A256GCM needs a 32-byte key)
     session_secret: str | None = Field(default=None)
 
-    # LangGraph agent
+    # LangGraph agent — which LLM provider the `assistant` node itself
+    # runs on (nothing to do with agent *identity*/delegation above, which
+    # is always PingOne regardless of this setting). "anthropic" (default),
+    # "openai", or "groq" — each provider gets its OWN model-name field
+    # (agent_model / model_id / groq_model), deliberately not one shared
+    # field: MODEL_ID and GROQ_MODEL can both stay set in .env at once
+    # (e.g. "gpt-4.1" and "llama-3.3-70b-versatile") without one becoming a
+    # landmine for the other when MODEL_PROVIDER is switched — a single
+    # shared field would silently send an OpenAI model name to Groq (or
+    # vice versa) the moment you flipped providers without also editing it.
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
+    model_provider: str = Field(default="anthropic")
+    openai_api_key: str | None = Field(default=None)
+    model_id: str | None = Field(default=None)  # used when model_provider="openai"
+    # Only needed when model_provider="groq". Free API key from
+    # console.groq.com — no billing required for the free tier.
+    groq_api_key: str | None = Field(default=None)
+    groq_model: str | None = Field(default=None)  # used when model_provider="groq"
 
     # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent
     task_agent_url: str = Field(default="http://localhost:9010")

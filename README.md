@@ -253,7 +253,18 @@ the rest as you go; each pair only unlocks once both its apps are filled in.
 string; hashed into the 32-byte key used for JWE session encryption — use
 a *different* value per service, they don't share sessions).
 `ANTHROPIC_API_KEY` is required for the chat panel (LangGraph calls
-`claude-sonnet-5` by default — set `AGENT_MODEL` to change it).
+`claude-sonnet-5` by default — set `AGENT_MODEL` to change it). Both
+`backend/` and `task-agent/` can instead run their own reasoning LLM on
+OpenAI or Groq: set `MODEL_PROVIDER=openai` + `OPENAI_API_KEY` + `MODEL_ID`
+(e.g. `gpt-4.1`), or `MODEL_PROVIDER=groq` + `GROQ_API_KEY` + `MODEL_ID`
+(e.g. `llama-3.3-70b-versatile`, free tier via console.groq.com), in
+either service's `.env` independently — this only changes which model
+answers, never how the agent proves its identity, which is always PingOne
+either way. The Task Agent's judge has its own independent
+`JUDGE_PROVIDER` switch (`anthropic`/`groq`/`openai`), so all three
+agents — orchestration, task, and judge — can each be pointed at a
+different provider. See CLAUDE.md's "Configurable LLM provider" section
+for the full picture.
 
 **What must match across services, and what must NOT**: `OIDC_DISCOVERY_URL`
 must be identical everywhere (same PingOne tenant). Each service's own

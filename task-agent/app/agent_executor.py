@@ -17,7 +17,7 @@ from agentorchestration_shared import InboundAuthError, verify_bearer_token
 from opentelemetry.trace import Status, StatusCode
 
 from app.config import Settings
-from app.graph import _extract_text, build_graph
+from app.graph import _extract_text, build_graph, resolved_agent_model_label
 from app.telemetry import with_span
 
 
@@ -96,6 +96,8 @@ class TaskAgentExecutor(AgentExecutor):
         with with_span(
             "a2a.task_execute",
             {
+                "agent.model_provider": self.settings.model_provider,
+                "agent.model": resolved_agent_model_label(self.settings),
                 "identity.sub": identity.sub or "",
                 "identity.agent_client_id": identity.agent_client_id or "",
                 "a2a.task_id": task.id,

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.trace import Status, StatusCode
 from sse_starlette.sse import EventSourceResponse
 
+from app.agent.graph import resolved_model_label
 from app.agent.tools import NEEDS_AGENT_AUTH_MARKER
 from app.auth.inbound import InboundAuthError, verify_inbound_token
 from app.auth.session import EXCHANGED_TOKEN_COOKIE, SESSION_COOKIE, read_cookie
@@ -96,6 +97,8 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
         with with_span(
             "agent.invoke",
             {
+                "agent.model_provider": settings.model_provider,
+                "agent.model": resolved_model_label(settings),
                 "identity.token_source": "exchanged" if delegated_token else "session",
                 "identity.sub": sub or "",
                 "identity.agent_client_id": agent_client_id or "",

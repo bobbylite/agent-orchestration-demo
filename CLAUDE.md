@@ -432,22 +432,77 @@ canonical copy for this service moved into `task-agent/app/graph.py`
 separate, different service, not shared.
 
 **The judge can run on a different LLM provider than `task_assistant`**
-(`Settings.judge_provider`, `"anthropic"` default or `"groq"`) — deliberate,
-because the judge is a pure text-in/structured-verdict-out evaluation with
-no tool calls, no delegation token, and no identity of its own, unlike
-`task_assistant`'s LLM. `task-agent/app/graph.py`'s `_build_judge_llm()`
-constructs either `ChatAnthropic` or `ChatGroq` and returns a plain
-`BaseChatModel`; `_build_judge_node()` calls `.with_structured_output(JudgeVerdict)`
-on whichever came back, unchanged. Groq's free tier is genuinely free
-(rate-limited, not credit-metered) and its hosted Llama models support
-tool-calling, which `.with_structured_output()` needs under the hood — the
-default Groq judge model is `llama-3.3-70b-versatile`
-(`_DEFAULT_GROQ_JUDGE_MODEL`), used when `JUDGE_MODEL` is unset. Set via
-`task-agent/.env`: `JUDGE_PROVIDER=groq` + `GROQ_API_KEY=<free key from
-console.groq.com>`. If `GROQ_API_KEY` is empty or invalid while
-`JUDGE_PROVIDER=groq`, the judge call fails and the fail-open behavior
-above kicks in (`status="pass"`) — the task still returns an answer, just
-without a real judge pass, rather than crashing the task.
+(`Settings.judge_provider`, `"anthropic"` default, `"groq"`, or `"openai"`)
+— deliberate, because the judge is a pure text-in/structured-verdict-out
+evaluation with no tool calls, no delegation token, and no identity of its
+own, unlike `task_assistant`'s LLM. `task-agent/app/graph.py`'s
+`_build_judge_llm()` constructs `ChatAnthropic`, `ChatGroq`, or `ChatOpenAI`
+and returns a plain `BaseChatModel`; `_build_judge_node()` calls
+`.with_structured_output(JudgeVerdict)` on whichever came back, unchanged.
+Groq's free tier is genuinely free (rate-limited, not credit-metered) and
+its hosted Llama models support tool-calling, which
+`.with_structured_output()` needs under the hood — the default Groq judge
+model is `llama-3.3-70b-versatile` (`_DEFAULT_GROQ_JUDGE_MODEL`), used when
+`JUDGE_MODEL` is unset. Set via `task-agent/.env`: `JUDGE_PROVIDER=groq` +
+`GROQ_API_KEY=<free key from console.groq.com>`. If `GROQ_API_KEY` is
+empty or invalid while `JUDGE_PROVIDER=groq`, the judge call fails and the
+fail-open behavior above kicks in (`status="pass"`) — the task still
+returns an answer, just without a real judge pass, rather than crashing
+the task. `JUDGE_PROVIDER=openai` reuses `OPENAI_API_KEY` (see "Configurable
+LLM provider" below) but defaults to a cheaper model,
+`gpt-4o-mini` (`_DEFAULT_OPENAI_JUDGE_MODEL`), not `MODEL_ID` — the judge
+doesn't need the same model strength as the agent it's grading, and
+`JUDGE_MODEL` overrides this same as the other two providers.
+
+## Configurable LLM provider: Anthropic, OpenAI, or Groq (added 2026-08-16)
+
+Both agents' own reasoning LLM — `backend/app/agent/graph.py`'s
+`assistant` node and `task-agent/app/graph.py`'s `task_assistant` node —
+are provider-switchable via `Settings.model_provider`: `"anthropic"`
+(default), `"openai"`, or `"groq"`. This is entirely orthogonal to agent
+*identity*/delegation (always PingOne, unaffected by this setting) and to
+the judge's own provider setting above (`judge_provider`, checked
+separately, same three options) — three independent provider knobs (one
+per agent: orchestration, task, judge) that happen to share the same
+`OPENAI_API_KEY`/`GROQ_API_KEY`/`MODEL_ID` env vars whenever more than one
+of them is pointed at the same non-Anthropic provider.
+
+- `backend/app/agent/graph.py`'s `_build_assistant_llm(settings)` and
+  `task-agent/app/graph.py`'s `_build_agent_llm(settings)` are separate
+  copies of the identical branch (same "outbound-facing code isn't shared
+  via `shared/`" convention as everywhere else in this codebase):
+  `model_provider == "openai"` → `ChatOpenAI(model=settings.model_id or
+  "gpt-4.1", api_key=SecretStr(settings.openai_api_key or ""))`;
+  `model_provider == "groq"` → `ChatGroq(model=settings.model_id or
+  "llama-3.3-70b-versatile", api_key=SecretStr(settings.groq_api_key or
+  ""))`; else fall through to the existing `ChatAnthropic(...)`
+  construction, unchanged. `.bind_tools(...)` is applied the same way
+  regardless of which came back — both `ChatOpenAI` and `ChatGroq` support
+  the identical LangChain tool-calling interface `ChatAnthropic` does.
+- `MODEL_ID` is the model used when `MODEL_PROVIDER` is `"openai"`
+  (e.g. `gpt-4.1`) or `"groq"` (e.g. `llama-3.3-70b-versatile`) — same env
+  var, whichever provider is selected decides how it's interpreted;
+  `AGENT_MODEL` keeps its existing meaning for `"anthropic"` so an
+  existing deployment that never sets `MODEL_PROVIDER` needs zero
+  changes. `backend/app/config.py` and `task-agent/app/config.py` both
+  gained the same four fields (`model_provider`, `openai_api_key`,
+  `model_id`, `groq_api_key`) — same shape, separately declared per
+  service like every other `Settings` field in this codebase.
+  `task-agent/app/config.py`'s `groq_api_key` is shared between
+  `model_provider="groq"` (task_assistant) and `judge_provider="groq"`
+  (the judge) — same underlying Groq account either way, one field.
+- The "Jarvis" system prompt in `backend/app/agent/graph.py` and the Task
+  Agent's system prompt are unaffected by this setting — only which LLM
+  object executes them changes.
+- `backend/.env`/`task-agent/.env` currently run `MODEL_PROVIDER=openai` +
+  `MODEL_ID=gpt-4.1` (a real OpenAI key in both, since it's the same
+  underlying OpenAI account either way — no identity-scoping reason to
+  keep it provider-distinct per service the way PingOne app credentials
+  are), with a real `GROQ_API_KEY` also populated in both so flipping
+  either agent's `MODEL_PROVIDER` to `groq` needs no further setup.
+  `judge_provider` was left at `anthropic` in both — that was a separate,
+  previously-made cost/quality tradeoff for the judge specifically (see
+  above), not something this change revisited.
 
 ## Telemetry for the Task Agent (added 2026-08-16)
 

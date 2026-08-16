@@ -17,6 +17,8 @@ dependencies = [
     "sse-starlette>=2.1",
     "agentorchestration-shared",
     "a2a-sdk>=1.1.0",
+    "langchain-openai>=1.5.1",
+    "langchain-groq>=1.1.3",
 ]
 
 [tool.uv.sources]

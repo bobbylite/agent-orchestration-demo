@@ -38,6 +38,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.sessions import StreamableHttpConnection
@@ -217,13 +218,48 @@ _SYSTEM = SystemMessage(
 )
 
 
-def _build_task_assistant_node(settings: Settings, tools: list):
-    llm = ChatAnthropic(
+_DEFAULT_OPENAI_MODEL = "gpt-4.1"
+_DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
+
+def _build_agent_llm(settings: Settings) -> BaseChatModel:
+    """Same MODEL_PROVIDER branch as backend/app/agent/graph.py's
+    _build_assistant_llm — kept as a separate copy per this service's own
+    convention (outbound-facing code isn't shared via shared/)."""
+    if settings.model_provider == "openai":
+        return ChatOpenAI(
+            model=settings.model_id or _DEFAULT_OPENAI_MODEL,
+            api_key=SecretStr(settings.openai_api_key or ""),
+        )
+    if settings.model_provider == "groq":
+        return ChatGroq(
+            model=settings.groq_model or _DEFAULT_GROQ_MODEL,
+            api_key=SecretStr(settings.groq_api_key or ""),
+        )
+    return ChatAnthropic(
         model_name=settings.agent_model,
         api_key=SecretStr(settings.anthropic_api_key or ""),
         timeout=None,
         stop=None,
-    ).bind_tools(tools)
+    )
+
+
+def resolved_agent_model_label(settings: Settings) -> str:
+    """The actual model name task_assistant will run, given
+    settings.model_provider — same resolution _build_agent_llm uses,
+    exposed separately so agent_executor.py can stamp it onto the
+    a2a.task_execute span without constructing a whole LLM client just to
+    read a string. Mirrors backend/app/agent/graph.py's
+    resolved_model_label."""
+    if settings.model_provider == "openai":
+        return settings.model_id or _DEFAULT_OPENAI_MODEL
+    if settings.model_provider == "groq":
+        return settings.groq_model or _DEFAULT_GROQ_MODEL
+    return settings.agent_model
+
+
+def _build_task_assistant_node(settings: Settings, tools: list):
+    llm = _build_agent_llm(settings).bind_tools(tools)
 
     async def task_assistant(state: AgentState, config: RunnableConfig) -> dict:
         response = await llm.ainvoke([_SYSTEM, *state["messages"]], config=config)
@@ -265,6 +301,7 @@ _JUDGE_SYSTEM = SystemMessage(
 
 
 _DEFAULT_GROQ_JUDGE_MODEL = "llama-3.3-70b-versatile"
+_DEFAULT_OPENAI_JUDGE_MODEL = "gpt-4o-mini"
 
 
 def _build_judge_llm(settings: Settings) -> BaseChatModel:
@@ -272,13 +309,21 @@ def _build_judge_llm(settings: Settings) -> BaseChatModel:
     structured verdict — no tool calls of its own, no delegation token, no
     identity — so unlike task_assistant's LLM it isn't tied to Anthropic.
     `judge_provider="groq"` runs it on Groq's free tier instead (rate-
-    limited, not billed); the model still needs tool-calling support since
-    `.with_structured_output()` uses it under the hood, which Groq's hosted
-    Llama models provide."""
+    limited, not billed); `judge_provider="openai"` reuses OPENAI_API_KEY
+    (defaulting to a cheap model rather than MODEL_ID, since the judge
+    doesn't need the same model strength as task_assistant). The model
+    still needs tool-calling support since `.with_structured_output()`
+    uses it under the hood, which Groq's hosted Llama models and OpenAI's
+    models both provide."""
     if settings.judge_provider == "groq":
         return ChatGroq(
             model=settings.judge_model or _DEFAULT_GROQ_JUDGE_MODEL,
             api_key=SecretStr(settings.groq_api_key or ""),
+        )
+    if settings.judge_provider == "openai":
+        return ChatOpenAI(
+            model=settings.judge_model or _DEFAULT_OPENAI_JUDGE_MODEL,
+            api_key=SecretStr(settings.openai_api_key or ""),
         )
     return ChatAnthropic(
         model_name=settings.judge_model or settings.agent_model,
@@ -288,8 +333,19 @@ def _build_judge_llm(settings: Settings) -> BaseChatModel:
     )
 
 
+def resolved_judge_model_label(settings: Settings) -> str:
+    """The actual model name the judge will run, given
+    settings.judge_provider — same resolution _build_judge_llm uses."""
+    if settings.judge_provider == "groq":
+        return settings.judge_model or _DEFAULT_GROQ_JUDGE_MODEL
+    if settings.judge_provider == "openai":
+        return settings.judge_model or _DEFAULT_OPENAI_JUDGE_MODEL
+    return settings.judge_model or settings.agent_model
+
+
 def _build_judge_node(settings: Settings):
     judge_llm = _build_judge_llm(settings).with_structured_output(JudgeVerdict)  # binds the contract to the verdict
+    judge_model_label = resolved_judge_model_label(settings)
 
     async def judge(state: AgentState, config: RunnableConfig) -> dict:
         attempts = state.get("judge_attempts", 0) + 1
@@ -308,6 +364,7 @@ def _build_judge_node(settings: Settings):
                 span.set_attribute("judge.status", "gave_up")
                 span.set_attribute("judge.reason", f"exceeded judge_max_attempts ({settings.judge_max_attempts})")
                 span.set_attribute("judge.provider", settings.judge_provider)
+                span.set_attribute("judge.model", judge_model_label)
                 return {"judge_attempts": attempts, "judge_status": "gave_up"}
 
             proposed_answer = _extract_text(state["messages"][-1].content)
@@ -332,6 +389,7 @@ def _build_judge_node(settings: Settings):
                 span.set_attribute("judge.status", "pass")
                 span.set_attribute("judge.reason", "evaluation call failed — fail-open")
                 span.set_attribute("judge.provider", settings.judge_provider)
+                span.set_attribute("judge.model", judge_model_label)
                 return {"judge_attempts": attempts, "judge_status": "pass"}
 
             assert isinstance(verdict, JudgeVerdict)
@@ -345,6 +403,7 @@ def _build_judge_node(settings: Settings):
             span.set_attribute("judge.status", verdict.status)
             span.set_attribute("judge.reason", verdict.reason)
             span.set_attribute("judge.provider", settings.judge_provider)
+            span.set_attribute("judge.model", judge_model_label)
             span.set_attribute("judge.missing_info_count", len(verdict.missing_info))
 
             if verdict.status == "fail":

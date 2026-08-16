@@ -44,13 +44,21 @@ function StoryEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
         stroke={meta.live ? "var(--brand)" : "var(--border)"}
         strokeDasharray={meta.active ? "6 4" : meta.live ? undefined : "4 4"}
         opacity={meta.live ? (meta.active ? 1 : 0.55) : 0.55}
-        style={
-          meta.active
-            ? { filter: "drop-shadow(0 0 5px color-mix(in srgb, var(--brand) 70%, transparent))" }
-            : undefined
-        }
-        className={meta.active ? "diagram-edge-flow" : undefined}
+        className={meta.active ? "diagram-edge-flow diagram-edge-glow" : undefined}
       />
+      {meta.active && (
+        // Two particles, offset by half a cycle, so the "data actually
+        // moving" read stays continuous rather than one dot chasing an
+        // empty gap.
+        <>
+          <circle r="3.5" fill="var(--brand)" className="diagram-edge-particle">
+            <animateMotion dur="1.3s" repeatCount="indefinite" path={path} />
+          </circle>
+          <circle r="3.5" fill="var(--brand)" className="diagram-edge-particle" style={{ animationDelay: "0.65s" }}>
+            <animateMotion dur="1.3s" repeatCount="indefinite" path={path} begin="0.65s" />
+          </circle>
+        </>
+      )}
       <foreignObject x={labelX - 90} y={labelY - 16} width={180} height={34} className="pointer-events-none overflow-visible">
         <div className="flex justify-center">
           <span
@@ -122,7 +130,8 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
           <div>
             <h2 className="text-sm font-semibold tracking-tight text-ink">How this works — identity &amp; data flow</h2>
             <p className="text-xs text-ink-muted">
-              Every hop re-verifies its own token fresh — nothing here is trusted just because an earlier hop said so.
+              Two front doors, one security chain — every hop re-verifies its own token fresh, no matter which
+              orchestrator the request came through.
             </p>
           </div>
           <button
@@ -175,7 +184,8 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
               </div>
             </dl>
             <p className="mt-2 border-t border-border pt-2 text-[10px] leading-snug text-ink-muted/80">
-              Same token, forwarded unchanged hop to hop — each service re-verifies all four independently.
+              Each hop mints its <em>own</em> token, scoped to exactly what it needs — never one token forwarded
+              unchanged. Every service verifies all four independently, regardless of who asked.
             </p>
           </div>
 

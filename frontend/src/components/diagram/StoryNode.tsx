@@ -1,4 +1,4 @@
-import type { ReactElement } from "react"
+import type { CSSProperties, ReactElement } from "react"
 import { Handle, Position, type NodeProps } from "@xyflow/react"
 import { isRecent, latestSpan, NODE_HANDLES, type StoryNodeData } from "./flowConfig"
 import type { TelemetrySpan } from "../../lib/api"
@@ -21,6 +21,9 @@ const KIND_STYLES: Record<StoryNodeData["kind"], { accent: string; icon: ReactEl
   // own; see the e-judge-propose/e-judge-retry edges) so it's visually
   // "between" those two kinds rather than a fresh color.
   judge: { accent: "color-mix(in srgb, var(--brand) 55%, var(--success) 45%)", icon: <ScaleIcon /> },
+  // Same muted tone as "browser" — Claude Desktop is the same signed-in
+  // human, just a second front door, not a new trust tier.
+  desktop: { accent: "var(--ink-muted)", icon: <DesktopIcon /> },
 }
 
 interface Props extends NodeProps {
@@ -35,15 +38,18 @@ export function StoryNode({ id, data, spans }: Props) {
   const match = instrumented ? latestSpan(spans, data.spanNames, data.service) : null
   const active = isRecent(match)
 
+  // `--node-glow-color` feeds the `diagram-node-glow` keyframe in index.css
+  // (a breathing box-shadow) — the accent varies per node kind, the
+  // animation itself doesn't, so the color rides in as a custom property
+  // rather than being baked into the keyframe.
+  const nodeStyle: CSSProperties = active
+    ? ({ borderColor: style.accent, "--node-glow-color": style.accent } as CSSProperties)
+    : { borderColor: "var(--border)" }
+
   return (
     <div
-      className="w-56 rounded-xl border bg-canvas-raised px-4 py-3.5 shadow-raised transition-all"
-      style={{
-        borderColor: active ? style.accent : "var(--border)",
-        boxShadow: active
-          ? `var(--shadow-raised), 0 0 0 1px ${style.accent}, 0 0 24px 2px color-mix(in srgb, ${style.accent} 55%, transparent)`
-          : "var(--shadow-raised)",
-      }}
+      className={`w-56 rounded-xl border bg-canvas-raised px-4 py-3.5 shadow-raised transition-all ${active ? "diagram-node-glow" : ""}`}
+      style={nodeStyle}
     >
       {handles.map((h) => (
         <Handle
@@ -146,6 +152,14 @@ function ScaleIcon() {
       <path d="M5.5 13.5h5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
       <path d="M2 6.2 4.5 3.5 7 6.2c0 1.4-1.1 2.3-2.5 2.3S2 7.6 2 6.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
       <path d="M9 6.2 11.5 3.5 14 6.2c0 1.4-1.1 2.3-2.5 2.3S9 7.6 9 6.2Z" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+  )
+}
+function DesktopIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="1.5" y="2.5" width="13" height="8.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.5 14h5M8 11v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   )
 }

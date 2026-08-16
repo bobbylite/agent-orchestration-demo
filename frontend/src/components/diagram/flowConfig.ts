@@ -1,6 +1,6 @@
 import type { TelemetrySpan } from "../../lib/api"
 
-export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge"
+export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge" | "desktop"
 
 /** OTel resource `service.name` values — see backend/app/telemetry.py and
  * task-agent/app/telemetry.py's RecordingSpanProcessor, which both stamp
@@ -46,7 +46,7 @@ export const STORY_NODES: Array<{
     position: { x: 20, y: 260 },
     data: {
       title: "Browser",
-      subtitle: "Signed-in human",
+      subtitle: "Signed-in human — front door #1",
       kind: "browser",
       spanNames: [],
     },
@@ -56,18 +56,18 @@ export const STORY_NODES: Array<{
     position: { x: 460, y: 20 },
     data: {
       title: "PingOne",
-      subtitle: "OIDC Identity Provider",
+      subtitle: "OIDC Identity Provider — the one thing both front doors trust",
       kind: "idp",
       spanNames: ["oidc.login.redirect", "oidc.login.callback", "agent.client_credentials", "agent.token_exchange"],
       service: SERVICE_CHAT_AGENT,
     },
   },
   {
-    id: "chatagent",
+    id: "orchagent",
     position: { x: 460, y: 300 },
     data: {
-      title: "Chat Agent",
-      subtitle: "FastAPI + LangGraph (backend/)",
+      title: "Orchestration Agent",
+      subtitle: "FastAPI + LangGraph (backend/) — decides when to delegate",
       kind: "agent",
       spanNames: ["agent.invoke", "inbound_auth.verify"],
       service: SERVICE_CHAT_AGENT,
@@ -78,7 +78,7 @@ export const STORY_NODES: Array<{
     position: { x: 860, y: 300 },
     data: {
       title: "Task Agent",
-      subtitle: "Own A2A server (task-agent/)",
+      subtitle: "Own A2A server (task-agent/) — trusts neither front door on say-so",
       kind: "specialist",
       spanNames: ["a2a.task_execute", "inbound_auth.verify"],
       service: SERVICE_TASK_AGENT,
@@ -108,7 +108,7 @@ export const STORY_NODES: Array<{
     id: "judge",
     position: { x: 860, y: 540 },
     data: {
-      title: "Judge",
+      title: "Judge Agent",
       // Provider is swappable per task-agent/.env's JUDGE_PROVIDER — Claude
       // (default) or Groq's free tier — since the judge only evaluates text
       // it already produced, no delegation token, no identity of its own.
@@ -116,6 +116,39 @@ export const STORY_NODES: Array<{
       kind: "judge",
       spanNames: ["judge.evaluate"],
       service: SERVICE_TASK_AGENT,
+    },
+  },
+  {
+    // Positioned in its own lane ABOVE PingOne — not below/beside
+    // orchagent — specifically so its edges never share orchagent's
+    // column. Claude never touches the Orchestration Agent at any point;
+    // this lane converges on PingOne and the Task Agent directly, the
+    // same two things the Orchestration Agent's own lane converges on,
+    // independently. Putting two unrelated nodes in the same column was
+    // exactly what caused the previous layout's edges to visually overlap
+    // orchagent's — see the "represent reality" diagram feedback.
+    id: "claudedesktop",
+    position: { x: 20, y: -480 },
+    data: {
+      title: "Claude Desktop",
+      subtitle: "Same human — front door #2",
+      kind: "desktop",
+      spanNames: [],
+    },
+  },
+  {
+    id: "claudebridge",
+    position: { x: 20, y: -240 },
+    data: {
+      title: "Claude Desktop Bridge",
+      // Deliberately styled and worded to echo orchagent's own subtitle —
+      // this node performs the identical role (same PingOne apps #2/#3,
+      // same decision of when to delegate), just spawned locally by Claude
+      // Desktop instead of running as backend/'s own FastAPI process. See
+      // CLAUDE.md "Claude Desktop as the orchestrator".
+      subtitle: "Local MCP server (claude-bridge/) — same identity as backend/",
+      kind: "agent",
+      spanNames: [],
     },
   },
 ]
@@ -143,7 +176,7 @@ export const STORY_EDGES: Array<{
   {
     id: "e-session",
     source: "browser",
-    target: "chatagent",
+    target: "orchagent",
     sourceHandle: "bottom",
     targetHandle: "left",
     label: "2. Session cookie",
@@ -152,7 +185,7 @@ export const STORY_EDGES: Array<{
   },
   {
     id: "e-approve",
-    source: "chatagent",
+    source: "orchagent",
     target: "pingone",
     sourceHandle: "top",
     targetHandle: "bottom",
@@ -162,7 +195,7 @@ export const STORY_EDGES: Array<{
   },
   {
     id: "e-verify-chat",
-    source: "chatagent",
+    source: "orchagent",
     target: "pingone",
     sourceHandle: "top2",
     targetHandle: "bottom2",
@@ -172,7 +205,7 @@ export const STORY_EDGES: Array<{
   },
   {
     id: "e-delegate",
-    source: "chatagent",
+    source: "orchagent",
     target: "taskagent",
     sourceHandle: "right",
     targetHandle: "left",
@@ -191,7 +224,7 @@ export const STORY_EDGES: Array<{
     sourceHandle: "top",
     targetHandle: "right",
     label: "Inbound auth — independently re-verifies the SAME token",
-    detail: "task-agent/app/agent_executor.py — no implicit trust in the Chat Agent's say-so.",
+    detail: "task-agent/app/agent_executor.py — no implicit trust in either front door's say-so.",
     meta: { spanName: "inbound_auth.verify", service: SERVICE_TASK_AGENT, attributeKeys: ["identity.agent_client_id"] },
   },
   {
@@ -232,7 +265,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "top",
     label: "Evaluator — proposed answer",
     detail:
-      "task_assistant's candidate answer, checked against delegated_request (what the Chat Agent actually asked for, not the human's literal words) via a structured JudgeVerdict.",
+      "task_assistant's candidate answer, checked against delegated_request (what the Orchestration Agent actually asked for, not the human's literal words) via a structured JudgeVerdict.",
     meta: {
       spanName: "judge.evaluate",
       service: SERVICE_TASK_AGENT,
@@ -253,6 +286,37 @@ export const STORY_EDGES: Array<{
       service: SERVICE_TASK_AGENT,
       attributeKeys: ["judge.status", "judge.reason"],
     },
+  },
+  {
+    id: "e-desktop-spawn",
+    source: "claudedesktop",
+    target: "claudebridge",
+    sourceHandle: "bottom",
+    targetHandle: "top",
+    label: "0. Spawned as a local subprocess",
+    detail: "No network hop — Claude Desktop launches this over stdio, the same way it would any local MCP server.",
+    meta: {},
+  },
+  {
+    id: "e-desktop-signin-delegate",
+    source: "claudebridge",
+    target: "pingone",
+    sourceHandle: "bottom",
+    targetHandle: "top",
+    label: "Sign in, then delegate — Authorization Code, then Client Credentials + Token Exchange",
+    detail:
+      "A real browser tab opens for a loopback-redirect sign-in (same PingOne app #1), then the same apps #2/#3 the Orchestration Agent uses — this bridge doesn't have its own identity, it borrows the Orchestration Agent's.",
+    meta: {},
+  },
+  {
+    id: "e-desktop-delegate",
+    source: "claudebridge",
+    target: "taskagent",
+    sourceHandle: "right",
+    targetHandle: "top2",
+    label: "A2A delegate — indistinguishable from the Orchestration Agent's own call",
+    detail: "Same protocol, same credential shape — the Task Agent has no way to tell which front door originated this request, by design.",
+    meta: {},
   },
 ]
 
@@ -281,8 +345,14 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     { id: "bottom2", type: "target", position: "bottom", offset: "70%" },
     { id: "right", type: "target", position: "right", offset: "30%" },
     { id: "right2", type: "target", position: "right", offset: "70%" },
+    // Claude Desktop Bridge's sign-in + delegate edge lands here — the
+    // TOP, not another bottom slot, specifically so it approaches from
+    // above (claudebridge's lane sits entirely at negative y) rather than
+    // sharing the bottom edge with orchagent's two edges, which is what
+    // caused the previous layout's visual overlap.
+    { id: "top", type: "target", position: "top", offset: "50%" },
   ],
-  chatagent: [
+  orchagent: [
     { id: "left", type: "target", position: "left", offset: "50%" },
     { id: "top", type: "source", position: "top", offset: "30%" },
     { id: "top2", type: "source", position: "top", offset: "70%" },
@@ -294,6 +364,11 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     { id: "right", type: "source", position: "right", offset: "50%" },
     { id: "bottom", type: "source", position: "bottom", offset: "30%" },
     { id: "bottom2", type: "target", position: "bottom", offset: "70%" },
+    // Claude Desktop Bridge's delegate edge — a second, distinct top
+    // handle (the existing "top" is a SOURCE, to PingOne's inbound-auth
+    // verify) so the incoming edge from above doesn't share a connection
+    // point with that outgoing one.
+    { id: "top2", type: "target", position: "top", offset: "20%" },
   ],
   mcp: [
     { id: "left", type: "target", position: "left", offset: "50%" },
@@ -304,6 +379,15 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
   judge: [
     { id: "top", type: "target", position: "top", offset: "30%" },
     { id: "top2", type: "source", position: "top", offset: "70%" },
+  ],
+  // Both live at negative y, well above PingOne — a dedicated lane, not a
+  // third column squeezed into the main flow. See the position comment on
+  // the claudedesktop node in STORY_NODES above.
+  claudedesktop: [{ id: "bottom", type: "source", position: "bottom", offset: "50%" }],
+  claudebridge: [
+    { id: "top", type: "target", position: "top", offset: "50%" },
+    { id: "bottom", type: "source", position: "bottom", offset: "50%" },
+    { id: "right", type: "source", position: "right", offset: "50%" },
   ],
 }
 

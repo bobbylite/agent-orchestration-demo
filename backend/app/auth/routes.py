@@ -23,6 +23,8 @@ from app.auth.session import (
     read_cookie,
     set_sealed_cookie,
 )
+from app.auth import token_ledger
+from app.auth.token_decode import decode_token_claims
 from app.config import Settings, get_settings
 from app.telemetry import with_span
 
@@ -206,6 +208,7 @@ async def agent_token(
                 ) from exc
             cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
             cc_span.set_attribute("oauth.scope", settings.agent_own_scope)
+            token_ledger.record("agent_own", actor_token["access_token"])
 
         with with_span("agent.token_exchange") as te_span:
             try:
@@ -229,6 +232,7 @@ async def agent_token(
             te_span.set_attribute("identity.sub", session.get("sub", ""))
             te_span.set_attribute("identity.agent_client_id", settings.agent_delegation_client_id or "")
             te_span.set_attribute("oauth.scope", settings.agent_delegation_scope)
+            token_ledger.record("delegation", delegated["access_token"])
 
         set_sealed_cookie(
             response,
@@ -260,3 +264,22 @@ async def me(request: Request, settings: Settings = Depends(get_settings)) -> di
         "name": (session or {}).get("name"),
         "agent_delegated": bool(delegated),
     }
+
+
+@router.get("/token-chain")
+async def token_chain(request: Request, settings: Settings = Depends(get_settings)) -> dict:
+    """Backs the frontend's Token Chain inspector — decoded claims (+ raw
+    compact JWT, for the panel's "reveal" toggle) for every token THIS
+    service has actually seen. `user` is decoded live from the session
+    cookie on every call (cheap, no network call, nothing to cache); `agent_own`/
+    `delegation` come from token_ledger's last-real-/agent-token-call
+    snapshot — null if the user has never clicked "Approve Agent Action" this
+    process's lifetime, deliberately NOT triggered by opening this panel
+    (see token_ledger.py's docstring — this endpoint only ever reports what
+    already happened, it never mints anything new)."""
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    user_entry = None
+    if session and session.get("access_token"):
+        user_entry = {"raw": session["access_token"], "claims": decode_token_claims(session["access_token"])}
+    ledger = token_ledger.snapshot()
+    return {"user": user_entry, "agent_own": ledger["agent_own"], "delegation": ledger["delegation"]}

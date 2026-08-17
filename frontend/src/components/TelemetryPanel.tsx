@@ -7,6 +7,9 @@ import { api, type TelemetrySpan } from "../lib/api"
 const ArchitectureDiagram = lazy(() =>
   import("./diagram/ArchitectureDiagram").then((m) => ({ default: m.ArchitectureDiagram })),
 )
+const TokenChainPanel = lazy(() =>
+  import("./TokenChainPanel").then((m) => ({ default: m.TokenChainPanel })),
+)
 
 const POLL_INTERVAL_MS = 2000
 
@@ -16,6 +19,7 @@ export function TelemetryPanel() {
   // render time below, for the panel's own newest-first card list.
   const [spans, setSpans] = useState<TelemetrySpan[]>([])
   const [diagramOpen, setDiagramOpen] = useState(false)
+  const [tokensOpen, setTokensOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -54,12 +58,25 @@ export function TelemetryPanel() {
             <DiagramIcon />
             Diagram
           </button>
+          <button
+            type="button"
+            onClick={() => setTokensOpen(true)}
+            className="flex items-center gap-1.5 rounded-md border border-brand/30 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-brand transition hover:bg-brand/10"
+          >
+            <TokensIcon />
+            Tokens
+          </button>
         </div>
       </div>
 
       {diagramOpen && (
         <Suspense fallback={<DiagramLoadingOverlay />}>
           <ArchitectureDiagram spans={spans} onClose={() => setDiagramOpen(false)} />
+        </Suspense>
+      )}
+      {tokensOpen && (
+        <Suspense fallback={<DiagramLoadingOverlay />}>
+          <TokenChainPanel onClose={() => setTokensOpen(false)} />
         </Suspense>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -131,6 +148,16 @@ function DiagramLoadingOverlay() {
         Loading diagram…
       </div>
     </div>
+  )
+}
+
+function TokensIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="5.5" cy="5.5" r="3.3" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="10.5" cy="10.5" r="3.3" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M5.5 2.2v1.1M5.5 7.7v1.1M2.2 5.5h1.1M7.7 5.5h1.1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
   )
 }
 

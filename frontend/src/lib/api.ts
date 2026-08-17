@@ -17,6 +17,28 @@ export interface MeResponse {
   agent_delegated: boolean
 }
 
+export interface TokenLedgerEntry {
+  /** Raw compact JWT — only ever fetched when the Token Chain panel is
+   * open, and only rendered behind an explicit "reveal" toggle client-side. */
+  raw: string
+  claims: Record<string, unknown>
+  /** Only present on task-agent's mcp_scoped_read/mcp_scoped_write slots —
+   * which MCP tool call last produced this exact token. */
+  tool?: string
+}
+
+export interface TokenChainResponse {
+  user: TokenLedgerEntry | null
+  agent_own: TokenLedgerEntry | null
+  delegation: TokenLedgerEntry | null
+}
+
+export interface TaskAgentTokenChainResponse {
+  task_agent_own: TokenLedgerEntry | null
+  mcp_scoped_read: TokenLedgerEntry | null
+  mcp_scoped_write: TokenLedgerEntry | null
+}
+
 export interface TelemetrySpan {
   name: string
   /** OTel resource `service.name` — disambiguates spans that share a name
@@ -54,6 +76,19 @@ export const api = {
    * running in every demo, so callers should treat a failure here as "no
    * data yet", not a hard error. */
   getTaskAgentTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/task-agent-api/telemetry"),
+  /** This service's half of the real token chain — decoded (+ raw) claims
+   * for the user's own token, the orchestration agent's own Client
+   * Credentials token, and the delegation token their Token Exchange
+   * produced. Null slots mean that step hasn't actually happened yet in
+   * this process's lifetime (e.g. "Approve Agent Action" was never
+   * clicked) — this endpoint only reports real history, it never mints
+   * anything on its own. */
+  getTokenChain: () => getJson<TokenChainResponse>("/api/auth/token-chain"),
+  /** task-agent's half of the chain — its own Client Credentials token
+   * plus whichever MCP-scoped (todos:read / todos:write) tokens its last
+   * real tool calls actually obtained. Same "reports reality, never
+   * synthesizes" contract as getTokenChain above. */
+  getTaskAgentTokenChain: () => getJson<TaskAgentTokenChainResponse>("/task-agent-api/tokens/chain"),
   /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
    * Token Exchange, scoped generically (not per todos:read/write action;
    * the Task Agent decides that itself once it holds this credential). */

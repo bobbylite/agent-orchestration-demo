@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field, SecretStr
 from app import policy
 from app.config import Settings
 from app.telemetry import with_span
+from app import token_ledger
 from app.token_grants import client_credentials_grant, get_token_endpoint, token_exchange
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,7 @@ async def _get_mcp_scoped_token(settings: Settings, actor_cache: dict[str, Any],
             scope=settings.agent_task_scope,
         )
         actor_cache["actor_token"] = actor["access_token"]
+        token_ledger.record("task_agent_own", actor["access_token"])
 
     exchanged = await token_exchange(
         token_endpoint,
@@ -182,6 +184,8 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         mcp_token = await _get_mcp_scoped_token(
             settings, actor_cache, delegation_token=delegation_token, scope=required_scope
         )
+        ledger_slot = "mcp_scoped_read" if scope_setting == "todos_read_scope" else "mcp_scoped_write"
+        token_ledger.record(ledger_slot, mcp_token, tool=tool_name)
     except httpx.HTTPStatusError as exc:
         return ToolMessage(
             content=(

@@ -25,6 +25,7 @@ from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
 from app.telemetry import get_recent_spans, init_telemetry
+from app import token_ledger
 
 
 @asynccontextmanager
@@ -56,6 +57,16 @@ async def telemetry() -> dict:
     frontend/vite.config.ts), same-origin, so no CORS middleware is needed
     here."""
     return {"spans": get_recent_spans()}
+
+
+@app.get("/tokens/chain")
+async def tokens_chain() -> dict:
+    """Backs the frontend's Token Chain inspector — this service's half of
+    the chain (backend/app/auth/routes.py's /api/auth/token-chain has the
+    other half). No auth/session concept here (this service has no cookie
+    of its own), so it's just token_ledger's snapshot, verbatim — null
+    slots until a real delegated tool call has actually happened."""
+    return token_ledger.snapshot()
 
 
 if __name__ == "__main__":

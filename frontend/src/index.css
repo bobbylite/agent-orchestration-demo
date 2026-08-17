@@ -247,3 +247,85 @@ body {
 .diagram-edge-particle {
   animation: diagram-particle-fade 1.3s linear infinite;
 }
+
+/* Token Chain panel (components/TokenChainPanel.tsx) — a vertical timeline
+   connecting token cards through RFC 8693 exchange stages. */
+
+@keyframes token-flow-dot {
+  0% {
+    top: -4px;
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+.token-flow-line {
+  position: relative;
+  width: 2px;
+  min-height: 28px;
+  background: var(--border);
+  margin: 0 auto;
+}
+
+.token-flow-line.active {
+  background: color-mix(in srgb, var(--brand) 45%, var(--border));
+}
+
+.token-flow-line .token-flow-dot {
+  position: absolute;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--brand);
+  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--brand) 75%, transparent);
+  animation: token-flow-dot 1.6s linear infinite;
+}
+
+/* A slow diagonal shimmer sweeping across a populated token card's top
+   accent bar — reads as "cryptographic material", distinct from the
+   diagram's breathing node glow (diagram-node-glow), which is a state
+   indicator rather than decoration. */
+@keyframes token-card-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.token-card-accent {
+  background-image: linear-gradient(
+    100deg,
+    var(--token-accent, var(--brand)) 0%,
+    color-mix(in srgb, var(--token-accent, var(--brand)) 40%, transparent) 35%,
+    var(--token-accent, var(--brand)) 50%,
+    color-mix(in srgb, var(--token-accent, var(--brand)) 40%, transparent) 65%,
+    var(--token-accent, var(--brand)) 100%
+  );
+  background-size: 250% 100%;
+  animation: token-card-shimmer 3.2s linear infinite;
+}
+
+@keyframes token-chip-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
+  }
+}
+
+.token-identity-chip {
+  animation: token-chip-pulse 2s ease-out infinite;
+}

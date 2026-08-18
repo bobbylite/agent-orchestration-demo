@@ -141,7 +141,7 @@ async def check_with_authorize(
                     headers={"Authorization": f"Bearer {actor_cache['authorize_worker_token']}"},
                     json={
                         "parameters": {
-                            settings.authorize_group_policy_parameter: settings.authorize_group_policy_value,
+                            settings.authorize_delegate_tasks_policy_parameter: settings.authorize_delegate_tasks_policy_value,
                             "AccessToken": subject_token,
                         }
                     },

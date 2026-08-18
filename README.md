@@ -430,7 +430,7 @@ configuration.
 - `task-agent/app/policy.py` — identity-ACL plus live PingOne Authorize
   decisions. Before a tool's downstream token exchange, it sends the verified
   delegated token to the deployed Decision Endpoint with
-  `evaluateGroupMembershipPolicy=true`; only `PERMIT` allows the call, and a
+  `evaluateDelegateTasksPolicy=true`; only `PERMIT` allows the call, and a
   denial can carry the policy statement's explanation (for example, that the
   user is not a member of `TodosGroup`). It also requests
   `evaluateEvaluatorOptimizerPolicy=true` once per task; the returned

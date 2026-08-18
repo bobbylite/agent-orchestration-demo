@@ -164,7 +164,7 @@ async def check_with_authorize(
     if not settings.authorize_client_id or not settings.authorize_client_secret:
         return False, "authorize_credentials_not_configured", None
 
-    with with_span("authorize.decision", {"policy.tool": tool_name}) as span:
+    with with_span("authorize.delegation_policy", {"policy.tool": tool_name}) as span:
         try:
             if "authorize_token_endpoint" not in actor_cache:
                 actor_cache["authorize_token_endpoint"] = await get_token_endpoint(settings.oidc_discovery_url or "")

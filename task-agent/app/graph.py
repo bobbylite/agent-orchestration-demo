@@ -194,6 +194,8 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         mcp_token = await _get_mcp_scoped_token(
             settings, actor_cache, delegation_token=delegation_token, scope=required_scope
         )
+        if not isinstance(mcp_token, str) or not mcp_token:
+            return ToolMessage(content="Denied: the todos task token was invalid.", tool_call_id=request.tool_call["id"])
         ledger_slot = "mcp_scoped_read" if scope_setting == "todos_read_scope" else "mcp_scoped_write"
         token_ledger.record(ledger_slot, mcp_token, tool=tool_name)
     except httpx.HTTPStatusError as exc:
@@ -205,6 +207,20 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
             ),
             tool_call_id=request.tool_call["id"],
         )
+
+    task_allowed, task_reason = await policy.check_task_policy(
+        settings,
+        tool_name=tool_name,
+        exchanged_token=mcp_token,
+        actor_cache=actor_cache,
+    )
+    if not task_allowed:
+        message = (
+            "Denied: the todos task policy did not permit this tool call."
+            if task_reason == "task_policy_denied"
+            else "Denied: the todos task policy decision could not be established."
+        )
+        return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
 
     try:
         tool = await _get_mcp_tool(settings, tool_name, mcp_token)

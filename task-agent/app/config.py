@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     authorize_client_auth_method: str = Field(default="client_secret_post")
     authorize_delegate_tasks_policy_parameter: str = Field(default="evaluateDelegateTasksPolicy")
     authorize_delegate_tasks_policy_value: str = Field(default="true")
+    authorize_task_policy_parameter: str = Field(default="evaluateTaskPolicy")
+    authorize_task_policy_value: str = Field(default="true")
 
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")

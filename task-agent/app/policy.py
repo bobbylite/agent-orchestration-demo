@@ -92,6 +92,51 @@ async def evaluate_judge_budget(
             return None, "evaluator_optimizer_request_failed"
 
 
+async def check_task_policy(
+    settings: Settings,
+    *,
+    tool_name: str,
+    exchanged_token: str | None,
+    actor_cache: dict[str, Any],
+) -> tuple[bool, str]:
+    """Authorize the freshly exchanged MCP token before calling MCP."""
+    if not settings.authorize_decision_endpoint or not exchanged_token:
+        return False, "task_policy_not_configured"
+    with with_span("authorize.task_policy", {"policy.tool": tool_name}) as span:
+        try:
+            if "authorize_token_endpoint" not in actor_cache:
+                actor_cache["authorize_token_endpoint"] = await get_token_endpoint(settings.oidc_discovery_url or "")
+            if "authorize_worker_token" not in actor_cache:
+                worker = await client_credentials_grant(
+                    actor_cache["authorize_token_endpoint"],
+                    client_id=settings.authorize_client_id,
+                    client_secret=settings.authorize_client_secret,
+                    scope=settings.authorize_scope,
+                    auth_method=settings.authorize_client_auth_method,
+                )
+                actor_cache["authorize_worker_token"] = worker["access_token"]
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    settings.authorize_decision_endpoint,
+                    headers={"Authorization": f"Bearer {actor_cache['authorize_worker_token']}"},
+                    json={"parameters": {
+                        settings.authorize_task_policy_parameter: settings.authorize_task_policy_value,
+                        "AccessToken": exchanged_token,
+                    }},
+                )
+                response.raise_for_status()
+                body = response.json()
+        except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+            span.set_attribute("policy.result", "error")
+            span.set_attribute("policy.failure_reason", type(exc).__name__)
+            return False, "task_policy_request_failed"
+        if not isinstance(body, dict) or body.get("decision") != "PERMIT":
+            span.set_attribute("policy.result", str(body.get("decision", "invalid")).lower() if isinstance(body, dict) else "invalid")
+            return False, "task_policy_denied"
+        span.set_attribute("policy.result", "permit")
+        return True, "permit"
+
+
 async def check_with_authorize(
     settings: Settings,
     *,

@@ -18,6 +18,7 @@ from opentelemetry.trace import Status, StatusCode
 
 from app.config import Settings
 from app.graph import _extract_text, build_graph, resolved_agent_model_label
+from app import policy
 from app.telemetry import with_span
 
 
@@ -111,7 +112,14 @@ class TaskAgentExecutor(AgentExecutor):
             # service's own RFC 8693 Token Exchange, performed fresh per tool
             # call once the graph knows which MCP capability it actually needs
             # (see app/graph.py's _scoped_tool_call).
-            graph = await build_graph(self.settings)
+            actor_cache: dict[str, object] = {}
+            judge_budget, judge_budget_reason = await policy.evaluate_judge_budget(
+                self.settings, subject_token=token, actor_cache=actor_cache
+            )
+            graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
+            task_span.set_attribute("judge.max_attempts", judge_budget or self.settings.judge_max_attempts)
+            if judge_budget_reason:
+                task_span.set_attribute("judge.budget_reason", judge_budget_reason)
             query = get_message_text(context.message)
             result = await graph.ainvoke(
                 {

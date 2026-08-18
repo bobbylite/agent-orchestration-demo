@@ -357,9 +357,10 @@ def resolved_judge_model_label(settings: Settings) -> str:
     return settings.judge_model or settings.agent_model
 
 
-def _build_judge_node(settings: Settings):
+def _build_judge_node(settings: Settings, judge_budget: int | None):
     judge_llm = _build_judge_llm(settings).with_structured_output(JudgeVerdict)  # binds the contract to the verdict
     judge_model_label = resolved_judge_model_label(settings)
+    max_attempts = judge_budget if judge_budget is not None else settings.judge_max_attempts
 
     async def judge(state: AgentState, config: RunnableConfig) -> dict:
         attempts = state.get("judge_attempts", 0) + 1
@@ -373,10 +374,10 @@ def _build_judge_node(settings: Settings):
         # StoryNode.tsx only previews a matched span's first 3 attributes,
         # and pass/fail is the one this feature exists to surface there.
         with with_span("judge.evaluate", {"judge.attempt": attempts}) as span:
-            if attempts > settings.judge_max_attempts:
+            if attempts > max_attempts:
                 logger.info("judge: gave up after %d attempts, returning last answer as-is", attempts - 1)
                 span.set_attribute("judge.status", "gave_up")
-                span.set_attribute("judge.reason", f"exceeded judge_max_attempts ({settings.judge_max_attempts})")
+                span.set_attribute("judge.reason", f"exceeded judge_max_attempts ({max_attempts})")
                 span.set_attribute("judge.provider", settings.judge_provider)
                 span.set_attribute("judge.model", judge_model_label)
                 return {"judge_attempts": attempts, "judge_status": "gave_up"}
@@ -440,9 +441,8 @@ def _judge_routing(state: AgentState) -> str:
     return "retry" if state.get("judge_status") == "fail" else "done"
 
 
-async def build_graph(settings: Settings) -> CompiledStateGraph:
+async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_budget: int | None = None) -> CompiledStateGraph:
     tools = await _get_mcp_tools(settings)
-    actor_cache: dict[str, Any] = {}
 
     async def _wrap(request: ToolCallRequest, execute):
         return await _scoped_tool_call(settings, actor_cache, request)
@@ -453,7 +453,7 @@ async def build_graph(settings: Settings) -> CompiledStateGraph:
     graph.set_entry_point("task_assistant")
 
     if settings.judge_enabled:
-        graph.add_node("judge", _build_judge_node(settings))
+        graph.add_node("judge", _build_judge_node(settings, judge_budget))
         graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: "judge"})
         graph.add_conditional_edges("judge", _judge_routing, {"retry": "task_assistant", "done": END})
         graph.add_edge("execute_tool", "task_assistant")

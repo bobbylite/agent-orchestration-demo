@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     authorize_client_secret: str | None = Field(default=None)
     authorize_scope: str = Field(default="")
     authorize_client_auth_method: str = Field(default="client_secret_post")
-    authorize_group_policy_parameter: str = Field(default="evaluateGroupsPolicy")
+    authorize_group_policy_parameter: str = Field(default="evaluateGroupMembershipPolicy")
     authorize_group_policy_value: str = Field(default="true")
 
     anthropic_api_key: str | None = Field(default=None)
@@ -112,6 +112,9 @@ class Settings(BaseSettings):
     # Original attempt + this many retries before giving up and returning
     # the last answer anyway, rather than looping forever.
     judge_max_attempts: int = Field(default=2)
+    # PingOne Authorize evaluator-optimizer policy. The policy-information
+    # statement supplies the retry budget for this task's judge.
+    evaluator_optimizer_policy_parameter: str = Field(default="evaluateEvaluatorOptimizerPolicy")
 
     # Only needed when model_provider="groq" or judge_provider="groq". Free
     # API key from console.groq.com — no billing required for the free tier.

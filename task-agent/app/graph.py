@@ -166,11 +166,21 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
 
-    if not policy.check(tool_name, client_id):
-        return ToolMessage(
-            content=f"Denied: agent '{client_id}' is not authorized to use tool '{tool_name}'.",
-            tool_call_id=request.tool_call["id"],
-        )
+    allowed, reason, policy_context = await policy.check_with_authorize(
+        settings,
+        tool_name=tool_name,
+        client_id=client_id,
+        subject_token=delegation_token,
+        actor_cache=actor_cache,
+    )
+    if not allowed:
+        if reason == "agent_acl_denied":
+            message = f"Denied: agent '{client_id}' is not authorized to use tool '{tool_name}'."
+        elif reason == "group_policy_denied":
+            message = policy_context or "Denied: the delegated user is not authorized for the todos group."
+        else:
+            message = "Denied: the todos authorization decision could not be established."
+        return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
 
     scope_setting = _REQUIRED_SCOPE_SETTING.get(tool_name)
     if not scope_setting or not delegation_token:

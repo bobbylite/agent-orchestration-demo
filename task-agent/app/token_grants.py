@@ -22,7 +22,12 @@ async def get_token_endpoint(discovery_url: str) -> str:
 
 
 async def client_credentials_grant(
-    token_endpoint: str, *, client_id: str | None, client_secret: str | None, scope: str
+    token_endpoint: str,
+    *,
+    client_id: str | None,
+    client_secret: str | None,
+    scope: str,
+    auth_method: str = "client_secret_basic",
 ) -> dict[str, Any]:
     """A client authenticates as itself, producing a token scoped to
     whatever `scope` names — which PingOne resource (and therefore which
@@ -30,8 +35,11 @@ async def client_credentials_grant(
     PingOne's own resource configuration for that scope.
     """
     data: dict[str, str] = {"grant_type": "client_credentials", "scope": scope}
+    auth = (client_id or "", client_secret or "") if auth_method == "client_secret_basic" else None
+    if auth_method == "client_secret_post":
+        data.update({"client_id": client_id or "", "client_secret": client_secret or ""})
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(token_endpoint, data=data, auth=(client_id or "", client_secret or ""))
+        resp = await client.post(token_endpoint, data=data, auth=auth)
         resp.raise_for_status()
         return resp.json()
 

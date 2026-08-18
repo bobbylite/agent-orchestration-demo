@@ -69,7 +69,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                 <div
                   className={`max-w-[75%] rounded-xl px-4 py-2.5 ${
                     message.role === "user"
-                      ? "whitespace-pre-wrap bg-brand text-sm leading-relaxed text-brand-ink shadow-card"
+                      ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
                       : "border border-border bg-canvas-raised text-ink shadow-card"
                   }`}
                 >

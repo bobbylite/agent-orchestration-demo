@@ -54,13 +54,24 @@ class Settings(BaseSettings):
     mcp_todos_audience: str = Field(default="http://localhost:9000/mcp")
 
     # What to actually request from the exchange above, per tool —
-    # must match backend/.env's copies... no it doesn't anymore: these are
-    # now THIS service's own decision, not inherited from an upstream
-    # scope. Must match mcp-todos-server/.env's TODOS_READ_SCOPE /
+    # must match mcp-todos-server/.env's TODOS_READ_SCOPE /
     # TODOS_WRITE_SCOPE exactly — that's what independently checks the
     # granted scope on every MCP tool call.
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+
+    # PingOne Authorize decision endpoint. The worker app is used only to
+    # authenticate the decision request; the delegated token is supplied to
+    # Authorize as AccessToken so it can resolve the human subject and the
+    # delegating agent itself. This decision runs before the MCP token
+    # exchange, once per protected tool call.
+    authorize_decision_endpoint: str | None = Field(default=None)
+    authorize_client_id: str | None = Field(default=None)
+    authorize_client_secret: str | None = Field(default=None)
+    authorize_scope: str = Field(default="")
+    authorize_client_auth_method: str = Field(default="client_secret_post")
+    authorize_group_policy_parameter: str = Field(default="evaluateGroupsPolicy")
+    authorize_group_policy_value: str = Field(default="true")
 
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")

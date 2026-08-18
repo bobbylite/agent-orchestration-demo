@@ -17,6 +17,18 @@ token is forwarded unchanged, and no "judge" node is a rubber stamp — each of 
 claims is independently, cryptographically, or structurally enforced, and this
 README walks through exactly how.
 
+## Further reading
+
+This project’s orchestration design follows the coordinating-agent and
+specialist-agent patterns described in Microsoft’s
+[AI agent design patterns](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns)
+and LangChain’s
+[multi-agent systems guide](https://docs.langchain.com/oss/python/langchain/multi-agent).
+The Task Agent’s quality loop is an evaluator-optimizer pattern: a judge
+reviews the specialist’s proposed answer and sends concrete feedback for a
+bounded retry, following the Azure Logic Apps
+[evaluator-optimizer pattern](https://azure.github.io/logicapps-labs/docs/logicapps-ai-course/build_multi_agent_systems/evaluator-optimizer/).
+
 ## Highlights
 
 - **Real multi-agent orchestration — two processes, one real wire protocol.**
@@ -415,10 +427,17 @@ configuration.
   — that grades `task_assistant`'s proposed answer against the delegated
   request and loops back on `fail`, emitting one `judge.evaluate` span per
   attempt.
-- `task-agent/app/policy.py` — identity-ACL only now (not scope — the
-  inbound token's scope is always the generic `agent:delegation`; real
-  enforcement of *which* action is allowed is whether the exchange above
-  succeeds, and `mcp-todos-server`'s own independent check).
+- `task-agent/app/policy.py` — identity-ACL plus live PingOne Authorize
+  decisions. Before a tool's downstream token exchange, it sends the verified
+  delegated token to the deployed Decision Endpoint with
+  `evaluateGroupMembershipPolicy=true`; only `PERMIT` allows the call, and a
+  denial can carry the policy statement's explanation (for example, that the
+  user is not a member of `TodosGroup`). It also requests
+  `evaluateEvaluatorOptimizerPolicy=true` once per task; the returned
+  `policy-information` statement supplies the judge's total-attempt budget,
+  with `JUDGE_MAX_ATTEMPTS` as the local fallback. The inbound token's scope
+  remains the generic `agent:delegation`; the MCP server independently checks
+  the downstream scope.
 - `mcp-todos-server/app/mcp_server.py` — the MCP tool surface itself. Every
   tool independently re-verifies the token task-agent's own exchange
   produced and re-checks policy (`mcp-todos-server/app/policy.py` — this

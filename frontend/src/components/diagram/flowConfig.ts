@@ -85,6 +85,21 @@ export const STORY_NODES: Array<{
     },
   },
   {
+    id: "authorize",
+    position: { x: 1260, y: 20 },
+    data: {
+      title: "PingOne Authorize",
+      // Same kind/icon as "pingone" below — deliberately: this genuinely
+      // is the same PingOne product, just a different capability (policy
+      // decisions, not identity/tokens). task-agent/app/policy.py is the
+      // only caller today — three decision-endpoint calls, one per span.
+      subtitle: "Decision Endpoint — task-agent/app/policy.py",
+      kind: "idp",
+      spanNames: ["authorize.evaluator_optimizer", "authorize.task_policy", "authorize.delegation_policy"],
+      service: SERVICE_TASK_AGENT,
+    },
+  },
+  {
     id: "mcp",
     position: { x: 1260, y: 300 },
     data: {
@@ -228,6 +243,48 @@ export const STORY_EDGES: Array<{
     meta: { spanName: "inbound_auth.verify", service: SERVICE_TASK_AGENT, attributeKeys: ["identity.agent_client_id"] },
   },
   {
+    id: "e-authorize-budget",
+    source: "taskagent",
+    target: "authorize",
+    sourceHandle: "top3",
+    targetHandle: "bottom",
+    label: "Judge retry budget — evaluator-optimizer policy",
+    detail: "Read once per task, before task_assistant's first attempt — the retry budget the judge loop gets.",
+    meta: {
+      spanName: "authorize.evaluator_optimizer",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.result", "policy.budget"],
+    },
+  },
+  {
+    id: "e-authorize-delegation-policy",
+    source: "taskagent",
+    target: "authorize",
+    sourceHandle: "top4",
+    targetHandle: "bottom2",
+    label: "Delegation policy — before any MCP token exchange",
+    detail: "Local ACL, then PingOne Authorize's group-access decision on the delegated user.",
+    meta: {
+      spanName: "authorize.delegation_policy",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.tool", "policy.result"],
+    },
+  },
+  {
+    id: "e-authorize-task-policy",
+    source: "taskagent",
+    target: "authorize",
+    sourceHandle: "top5",
+    targetHandle: "bottom3",
+    label: "Task policy — after the MCP-scoped exchange, before the call",
+    detail: "Authorizes the freshly exchanged todos:read/todos:write token itself, fresh per tool call.",
+    meta: {
+      spanName: "authorize.task_policy",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.tool", "policy.result"],
+    },
+  },
+  {
     id: "e-mcp",
     source: "taskagent",
     target: "mcp",
@@ -369,6 +426,17 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     // verify) so the incoming edge from above doesn't share a connection
     // point with that outgoing one.
     { id: "top2", type: "target", position: "top", offset: "20%" },
+    // Three new source handles, one per PingOne Authorize decision call —
+    // clustered between top2 (20%) and top (50%) so they read as a
+    // distinct group without crossing either existing top-side edge.
+    { id: "top3", type: "source", position: "top", offset: "30%" },
+    { id: "top4", type: "source", position: "top", offset: "37%" },
+    { id: "top5", type: "source", position: "top", offset: "44%" },
+  ],
+  authorize: [
+    { id: "bottom", type: "target", position: "bottom", offset: "30%" },
+    { id: "bottom2", type: "target", position: "bottom", offset: "50%" },
+    { id: "bottom3", type: "target", position: "bottom", offset: "70%" },
   ],
   mcp: [
     { id: "left", type: "target", position: "left", offset: "50%" },

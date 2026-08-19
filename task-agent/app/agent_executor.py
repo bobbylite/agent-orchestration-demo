@@ -114,7 +114,8 @@ class TaskAgentExecutor(AgentExecutor):
             # (see app/graph.py's _scoped_tool_call).
             actor_cache: dict[str, object] = {}
             judge_budget, judge_budget_reason = await policy.evaluate_judge_budget(
-                self.settings, subject_token=token, actor_cache=actor_cache
+                self.settings, subject_token=token,
+                client_id=identity.agent_client_id,
             )
             graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
             task_span.set_attribute("judge.max_attempts", judge_budget or self.settings.judge_max_attempts)

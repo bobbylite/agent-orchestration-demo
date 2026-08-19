@@ -171,7 +171,6 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         tool_name=tool_name,
         client_id=client_id,
         subject_token=delegation_token,
-        actor_cache=actor_cache,
     )
     if not allowed:
         if reason == "agent_acl_denied":
@@ -212,7 +211,7 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         settings,
         tool_name=tool_name,
         exchanged_token=mcp_token,
-        actor_cache=actor_cache,
+        client_id=client_id,
     )
     if not task_allowed:
         message = (

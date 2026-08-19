@@ -25,7 +25,7 @@ from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
 from app.telemetry import get_recent_spans, init_telemetry
-from app import token_ledger
+from app import authorize_audit, token_ledger
 
 
 @asynccontextmanager
@@ -67,6 +67,16 @@ async def tokens_chain() -> dict:
     of its own), so it's just token_ledger's snapshot, verbatim — null
     slots until a real delegated tool call has actually happened."""
     return token_ledger.snapshot()
+
+
+@app.get("/authorize/decisions")
+async def authorize_decisions() -> dict:
+    """Backs the frontend's Authorize Decisions panel — every PingOne
+    Authorize decision this service has requested (evaluator_optimizer,
+    task_policy, delegation_policy), newest first. See
+    app/authorize_audit.py; unlike token_ledger above, this is a genuine
+    append-only history, not a latest-value snapshot."""
+    return {"entries": authorize_audit.get_recent()}
 
 
 if __name__ == "__main__":

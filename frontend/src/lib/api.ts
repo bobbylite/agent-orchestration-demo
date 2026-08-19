@@ -39,6 +39,16 @@ export interface TaskAgentTokenChainResponse {
   mcp_scoped_write: TokenLedgerEntry | null
 }
 
+export interface AuthorizeDecisionEntry {
+  id: string
+  timestamp: string
+  policy: "evaluator_optimizer" | "task_policy" | "delegation_policy"
+  tool: string | null
+  decision: "permit" | "deny" | "error"
+  agent_client_id: string | null
+  reason: string | null
+}
+
 export interface TelemetrySpan {
   name: string
   /** OTel resource `service.name` — disambiguates spans that share a name
@@ -89,6 +99,11 @@ export const api = {
    * real tool calls actually obtained. Same "reports reality, never
    * synthesizes" contract as getTokenChain above. */
   getTaskAgentTokenChain: () => getJson<TaskAgentTokenChainResponse>("/task-agent-api/tokens/chain"),
+  /** Every PingOne Authorize decision task-agent has requested
+   * (evaluator_optimizer / task_policy / delegation_policy), newest
+   * first — a genuine history, unlike the token-chain snapshots above.
+   * See task-agent/app/authorize_audit.py. */
+  getAuthorizeDecisions: () => getJson<{ entries: AuthorizeDecisionEntry[] }>("/task-agent-api/authorize/decisions"),
   /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
    * Token Exchange, scoped generically (not per todos:read/write action;
    * the Task Agent decides that itself once it holds this credential). */

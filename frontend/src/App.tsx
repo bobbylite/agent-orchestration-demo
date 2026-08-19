@@ -95,8 +95,8 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
       <header className="z-10 flex shrink-0 items-center justify-between border-b border-border bg-canvas-raised px-7 py-4 shadow-card">
         <div>
-          <h1 className="text-[15px] font-semibold tracking-tight">Agent Orchestration Console</h1>
-          <p className="text-xs text-ink-muted">LangGraph agent · PingOne identity · OpenTelemetry</p>
+          <h1 className="text-[15px] font-semibold tracking-tight">Multi Agent Orchestration | Digital Assistant</h1>
+          <p className="text-xs text-ink-muted">LangChain · PingOne identity · OpenTelemetry</p>
         </div>
         <div className="flex items-center gap-3">
           <SignInButton me={me} />

@@ -791,6 +791,23 @@ has these settings at all).
 
 ## Known gotchas (all previously hit — don't re-debug these)
 
+- **`task-agent/app/policy.py`'s three PingOne Authorize calls used to
+  re-mint a fresh worker Client Credentials token every single task**
+  (via a task-scoped `actor_cache`), which was real, avoidable load on
+  PingOne and contributed to hitting a `REQUEST_LIMITED` rate limit under
+  rapid demo use — confirmed 2026-08-19. Fixed by moving the worker-token
+  cache to process scope (`policy.py`'s `_worker_cache` module dict,
+  `_get_worker_token()`, refreshed only within 30s of real expiry) since
+  the worker app's own identity doesn't vary per task, unlike the
+  Authorize *decision* itself, which is still requested fresh every call
+  (`_post_decision()`) — never cache the decision, only the credential
+  used to ask. `_post_decision()` also retries a `429` up to twice with
+  backoff (honoring `Retry-After` when PingOne sends one) before failing
+  closed, same as any other upstream failure. This dropped `actor_cache`
+  entirely from `evaluate_judge_budget`/`check_task_policy`/
+  `check_with_authorize`'s signatures — it's still used elsewhere in
+  `task-agent/app/graph.py` for the *separate* task-agent-own/MCP-scoped
+  token caching, untouched by this fix.
 - **`a2a-sdk` self-instruments onto any registered OTel `TracerProvider`**
   — `EventQueue`/request-handler/client-transport methods start emitting
   spans the moment `init_telemetry()` registers a real provider, flooding

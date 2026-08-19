@@ -10,6 +10,9 @@ const ArchitectureDiagram = lazy(() =>
 const TokenChainPanel = lazy(() =>
   import("./TokenChainPanel").then((m) => ({ default: m.TokenChainPanel })),
 )
+const AuthorizeDecisionsPanel = lazy(() =>
+  import("./AuthorizeDecisionsPanel").then((m) => ({ default: m.AuthorizeDecisionsPanel })),
+)
 
 const POLL_INTERVAL_MS = 2000
 
@@ -20,6 +23,7 @@ export function TelemetryPanel() {
   const [spans, setSpans] = useState<TelemetrySpan[]>([])
   const [diagramOpen, setDiagramOpen] = useState(false)
   const [tokensOpen, setTokensOpen] = useState(false)
+  const [authorizeOpen, setAuthorizeOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -66,6 +70,14 @@ export function TelemetryPanel() {
             <TokensIcon />
             Tokens
           </button>
+          <button
+            type="button"
+            onClick={() => setAuthorizeOpen(true)}
+            className="flex items-center gap-1.5 rounded-md border border-brand/30 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-brand transition hover:bg-brand/10"
+          >
+            <AuthorizeIcon />
+            Decisions
+          </button>
         </div>
       </div>
 
@@ -77,6 +89,11 @@ export function TelemetryPanel() {
       {tokensOpen && (
         <Suspense fallback={<DiagramLoadingOverlay />}>
           <TokenChainPanel onClose={() => setTokensOpen(false)} />
+        </Suspense>
+      )}
+      {authorizeOpen && (
+        <Suspense fallback={<DiagramLoadingOverlay />}>
+          <AuthorizeDecisionsPanel onClose={() => setAuthorizeOpen(false)} />
         </Suspense>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -168,6 +185,20 @@ function DiagramIcon() {
       <rect x="10.5" y="2" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <rect x="5.75" y="9.5" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <path d="M3.25 6.5V8a1 1 0 0 0 1 1H8m4.75-2.5V8a1 1 0 0 1-1 1H8m0 0v.5" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
+
+function AuthorizeIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 1.5 13.5 3.5V7.5C13.5 11 11.2 13.3 8 14.5C4.8 13.3 2.5 11 2.5 7.5V3.5L8 1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M5.5 8 7.2 9.7 10.5 6.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

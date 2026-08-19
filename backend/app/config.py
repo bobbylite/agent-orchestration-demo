@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -82,6 +83,15 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None)
     groq_model: str | None = Field(default=None)  # used when model_provider="groq"
 
+    # LangSmith tracing — purely additive to this service's own OpenTelemetry
+    # spans (see CLAUDE.md "OpenTelemetry is the product"), off by default.
+    # Read directly by langchain-core's own tracer via os.environ (see
+    # get_settings() below) — no LangSmith code is imported or called directly.
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="Todos")
+
     # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent
     task_agent_url: str = Field(default="http://localhost:9010")
 
@@ -106,4 +116,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.langsmith_tracing:
+        os.environ.setdefault("LANGSMITH_TRACING", "true")
+        os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)
+        os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+        if settings.langsmith_api_key:
+            os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    return settings

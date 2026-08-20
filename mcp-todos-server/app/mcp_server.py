@@ -115,3 +115,16 @@ async def complete_todo(todo_id: str) -> dict:
         raise ToolError(str(exc)) from exc
     _record("complete_todo", "success", caller)
     return todo
+
+
+@mcp.tool
+async def reopen_todo(todo_id: str) -> dict:
+    """Reopen a completed todo and return it."""
+    caller = await _authorize("reopen_todo")
+    try:
+        todo = store.reopen_todo(todo_id)
+    except KeyError as exc:
+        _record("reopen_todo", "error", caller, detail=str(exc))
+        raise ToolError(str(exc)) from exc
+    _record("reopen_todo", "success", caller)
+    return todo

@@ -24,7 +24,7 @@ from fastapi import FastAPI
 from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
-from app.telemetry import get_recent_spans, init_telemetry
+from app.telemetry import clear_recent_spans, get_recent_spans, init_telemetry
 from app import authorize_audit, token_ledger
 
 
@@ -59,6 +59,11 @@ async def telemetry() -> dict:
     return {"spans": get_recent_spans()}
 
 
+@app.delete("/telemetry")
+async def clear_telemetry() -> dict:
+    return {"cleared": clear_recent_spans()}
+
+
 @app.get("/tokens/chain")
 async def tokens_chain() -> dict:
     """Backs the frontend's Token Chain inspector — this service's half of
@@ -77,6 +82,11 @@ async def authorize_decisions() -> dict:
     app/authorize_audit.py; unlike token_ledger above, this is a genuine
     append-only history, not a latest-value snapshot."""
     return {"entries": authorize_audit.get_recent()}
+
+
+@app.delete("/authorize/decisions")
+async def clear_authorize_decisions() -> dict:
+    return {"cleared": authorize_audit.clear()}
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { api, type TelemetrySpan } from "../lib/api"
 
 // Lazy-loaded: React Flow is real weight (~150kB gzipped) that plain chat
@@ -24,10 +24,13 @@ export function TelemetryPanel() {
   const [diagramOpen, setDiagramOpen] = useState(false)
   const [tokensOpen, setTokensOpen] = useState(false)
   const [authorizeOpen, setAuthorizeOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const pollGeneration = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     async function poll() {
+      const generation = pollGeneration.current
       // Two independent processes (backend + task-agent), each best-effort:
       // task-agent may not be running in every demo, so a failure fetching
       // its spans shouldn't blank out the Chat Agent's. Merge by start_time
@@ -36,7 +39,7 @@ export function TelemetryPanel() {
       const results = await Promise.allSettled([api.getTelemetry(), api.getTaskAgentTelemetry()])
       const merged = results.flatMap((r) => (r.status === "fulfilled" ? r.value.spans : []))
       merged.sort((a, b) => a.start_time - b.start_time)
-      if (!cancelled) setSpans(merged)
+      if (!cancelled && generation === pollGeneration.current) setSpans(merged)
     }
     poll()
     const id = setInterval(poll, POLL_INTERVAL_MS)
@@ -48,12 +51,28 @@ export function TelemetryPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
-        <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">OpenTelemetry Spans</h2>
-        <div className="flex items-center gap-2">
+      <div className="flex shrink-0 flex-col gap-3 border-b border-border px-5 py-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">OpenTelemetry</h2>
           <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
             {spans.length}
           </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={clearing}
+            onClick={async () => {
+              pollGeneration.current += 1
+              setSpans([])
+              setClearing(true)
+              await Promise.allSettled([api.clearTelemetry(), api.clearTaskAgentTelemetry()])
+              setClearing(false)
+            }}
+            className="rounded-md border border-border bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-ink-muted transition hover:bg-code-bg disabled:opacity-50"
+          >
+            {clearing ? "Clearing…" : "Clear"}
+          </button>
           <button
             type="button"
             onClick={() => setDiagramOpen(true)}

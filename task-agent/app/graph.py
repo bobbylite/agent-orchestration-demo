@@ -126,6 +126,7 @@ _REQUIRED_SCOPE_SETTING = {
     "list_todos": "todos_read_scope",
     "add_todo": "todos_write_scope",
     "complete_todo": "todos_write_scope",
+    "reopen_todo": "todos_write_scope",
 }
 
 
@@ -233,7 +234,7 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
 _SYSTEM = SystemMessage(
     content=(
         "You are the Task Agent, a specialist backend agent that manages a todo list via MCP "
-        "tools (list_todos, add_todo, complete_todo). Your final answer is consumed by another "
+        "tools (list_todos, add_todo, complete_todo, reopen_todo). Your final answer is consumed by another "
         "AI agent (the Chat Agent), not read directly by a human, so preserve structured details "
         "instead of writing a purely prose summary that drops them.\n\n"
         "Every todo has an `id`. Whenever you report todos — after list_todos, or after "
@@ -242,6 +243,10 @@ _SYSTEM = SystemMessage(
         "If you're asked to complete a todo by name or description rather than by id, don't "
         "refuse or ask for an id — call list_todos yourself first, match the todo by its text, "
         "then call complete_todo with the id you found, all within this same turn.\n\n"
+        "If you're asked to reopen, undo, or uncomplete a todo by name or description rather than "
+        "by id, call list_todos first, match the text case-insensitively, and then call reopen_todo "
+        "with the matching id. If there is no match, report that without mutating anything; if "
+        "there are multiple matches, ask for clarification. Report the todo id and done=false.\n\n"
         "If a tool call is denied or fails, explain the real reason plainly and concisely."
     )
 )

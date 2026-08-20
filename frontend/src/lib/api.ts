@@ -79,6 +79,7 @@ export const api = {
   getConfig: () => getJson<ConfigResponse>("/api/config"),
   getMe: () => getJson<MeResponse>("/api/auth/me"),
   getTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/api/telemetry"),
+  clearTelemetry: () => getJson<{ cleared: number }>("/api/telemetry", { method: "DELETE" }),
   /** task-agent's own spans (inbound_auth.verify, a2a.task_execute,
    * judge.evaluate — see task-agent/app/telemetry.py) — a separate process
    * from the Chat Agent backend, proxied via vite (see vite.config.ts)
@@ -86,6 +87,7 @@ export const api = {
    * running in every demo, so callers should treat a failure here as "no
    * data yet", not a hard error. */
   getTaskAgentTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/task-agent-api/telemetry"),
+  clearTaskAgentTelemetry: () => getJson<{ cleared: number }>("/task-agent-api/telemetry", { method: "DELETE" }),
   /** This service's half of the real token chain — decoded (+ raw) claims
    * for the user's own token, the orchestration agent's own Client
    * Credentials token, and the delegation token their Token Exchange
@@ -104,6 +106,8 @@ export const api = {
    * first — a genuine history, unlike the token-chain snapshots above.
    * See task-agent/app/authorize_audit.py. */
   getAuthorizeDecisions: () => getJson<{ entries: AuthorizeDecisionEntry[] }>("/task-agent-api/authorize/decisions"),
+  clearAuthorizeDecisions: () =>
+    getJson<{ cleared: number }>("/task-agent-api/authorize/decisions", { method: "DELETE" }),
   /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
    * Token Exchange, scoped generically (not per todos:read/write action;
    * the Task Agent decides that itself once it holds this credential). */

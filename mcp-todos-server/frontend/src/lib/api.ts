@@ -56,7 +56,9 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
   completeTodo: (id: string) => getJson<Todo>(`/api/todos/${id}/complete`, { method: "POST" }),
+  reopenTodo: (id: string) => getJson<Todo>(`/api/todos/${id}/reopen`, { method: "POST" }),
   getAudit: () => getJson<{ entries: AuditEntry[] }>("/api/audit"),
+  clearAudit: () => getJson<{ cleared: number }>("/api/audit", { method: "DELETE" }),
   loginUrl: "/api/auth/login",
   logoutUrl: "/api/auth/logout",
 }

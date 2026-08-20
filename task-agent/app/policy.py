@@ -33,6 +33,7 @@ def _identity_acl() -> dict[str, set[str]]:
         "list_todos": allowed,
         "add_todo": allowed,
         "complete_todo": allowed,
+        "reopen_todo": allowed,
     }
 
 

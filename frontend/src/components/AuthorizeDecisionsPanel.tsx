@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { api, type AuthorizeDecisionEntry } from "../lib/api"
 
 interface Props {
@@ -15,6 +15,8 @@ const POLICY_LABELS: Record<AuthorizeDecisionEntry["policy"], string> = {
 
 export function AuthorizeDecisionsPanel({ onClose }: Props) {
   const [entries, setEntries] = useState<AuthorizeDecisionEntry[]>([])
+  const [clearing, setClearing] = useState(false)
+  const pollGeneration = useRef(0)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -27,13 +29,14 @@ export function AuthorizeDecisionsPanel({ onClose }: Props) {
   useEffect(() => {
     let cancelled = false
     async function poll() {
+      const generation = pollGeneration.current
       // task-agent only — it's the only service that calls PingOne
       // Authorize's Decision Endpoint (see task-agent/app/policy.py). A
       // failed fetch (task-agent not running) just leaves the list as-is,
       // same best-effort pattern as TelemetryPanel/TokenChainPanel.
       try {
         const res = await api.getAuthorizeDecisions()
-        if (!cancelled) setEntries(res.entries)
+        if (!cancelled && generation === pollGeneration.current) setEntries(res.entries)
       } catch {
         // ignore — degrade to whatever was last successfully fetched
       }
@@ -61,6 +64,20 @@ export function AuthorizeDecisionsPanel({ onClose }: Props) {
           </div>
           <div className="flex items-center gap-2">
             <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">{entries.length}</span>
+            <button
+              type="button"
+              disabled={clearing}
+              onClick={async () => {
+                pollGeneration.current += 1
+                setEntries([])
+                setClearing(true)
+                await api.clearAuthorizeDecisions().catch(() => null)
+                setClearing(false)
+              }}
+              className="rounded-md border border-border bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-ink-muted transition hover:bg-code-bg disabled:opacity-50"
+            >
+              {clearing ? "Clearing…" : "Clear"}
+            </button>
             <button
               type="button"
               onClick={onClose}

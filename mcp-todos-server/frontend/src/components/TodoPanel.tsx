@@ -54,12 +54,24 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
   }
 
   async function handleComplete(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: true } : t)))
     try {
       await api.completeTodo(id)
       onActivity()
     } catch {
-      // best-effort; a manual refresh reconciles if this actually failed
+      if (previous) setTodos((prev) => prev.map((t) => (t.id === id ? previous : t)))
+    }
+  }
+
+  async function handleReopen(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
+    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: false } : t)))
+    try {
+      await api.reopenTodo(id)
+      onActivity()
+    } catch {
+      if (previous) setTodos((prev) => prev.map((t) => (t.id === id ? previous : t)))
     }
   }
 
@@ -101,7 +113,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         ) : (
           <ul className="flex flex-col gap-3">
             {todos.map((todo) => (
-              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} />
+              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} onReopen={handleReopen} />
             ))}
           </ul>
         )}

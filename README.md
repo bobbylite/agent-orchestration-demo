@@ -429,6 +429,32 @@ curl -i https://todos.example.com/api/health
 
 Keep replicas at one initially because todos, telemetry, audit entries, and token ledgers are in memory.
 
+## Deployed demo URLs
+
+The current Kubernetes deployment exposes two browser origins:
+
+- Chat console: https://rluisi-agent-orchestration-client.ping-devops.com
+- Todos UI: https://rluisi-agent-orchestration-todos.ping-devops.com
+
+Useful smoke-test endpoints:
+
+- Chat health: https://rluisi-agent-orchestration-client.ping-devops.com/api/health
+- Task Agent telemetry proxy: https://rluisi-agent-orchestration-client.ping-devops.com/task-agent-api/telemetry
+- Todos health: https://rluisi-agent-orchestration-todos.ping-devops.com/api/health
+
+These URLs are deployment-specific and require the corresponding PingOne configuration for login. Public browser URLs are different from internal Kubernetes URLs: the backend reaches `agentorchestration-task-agent:9010`, and the Task Agent reaches `agentorchestration-mcp-todos-server:9000/mcp`.
+
+## Release and Git tagging
+
+Use one immutable version tag for all five images and the Helm release; do not use `latest`. Keep per-image overrides such as `backend.imageTag` aligned with the global `image.tag`. After the commit and images are finalized, an annotated Git tag can be created and pushed:
+
+```bash
+git tag -a v1.0.0 -m "release v1.0.0"
+git push origin v1.0.0
+```
+
+Do not commit generated deployment values or credentials. Use `existingSecret`/external secret management for production; any credential-looking values currently present in deployment overrides should be rotated and removed separately.
+
 ## How the pieces fit together
 
 - `backend/app/telemetry.py` — the `RecordingSpanProcessor` ring buffer and

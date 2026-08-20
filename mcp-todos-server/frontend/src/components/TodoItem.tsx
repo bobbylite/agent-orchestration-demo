@@ -4,6 +4,7 @@ import { CreatorBadge } from "./CreatorBadge"
 interface Props {
   todo: Todo
   onComplete: (id: string) => void
+  onReopen: (id: string) => void
 }
 
 function formatTime(iso: string): string {
@@ -19,16 +20,15 @@ function formatTime(iso: string): string {
   }
 }
 
-export function TodoItem({ todo, onComplete }: Props) {
+export function TodoItem({ todo, onComplete, onReopen }: Props) {
   const creator = todo.creator_label ?? todo.creator_sub ?? "Unknown"
 
   return (
     <li className="animate-pop-in flex items-start gap-3 rounded-xl border border-border bg-canvas-raised p-3.5 shadow-card">
       <button
         type="button"
-        onClick={() => !todo.done && onComplete(todo.id)}
-        disabled={todo.done}
-        aria-label={todo.done ? "Completed" : "Mark as done"}
+        onClick={() => (todo.done ? onReopen(todo.id) : onComplete(todo.id))}
+        aria-label={todo.done ? "Undo completion" : "Mark as done"}
         className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition ${
           todo.done
             ? "border-success bg-success text-canvas-raised"

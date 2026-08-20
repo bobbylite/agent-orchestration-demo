@@ -9,6 +9,7 @@ export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "ju
  * that TelemetryPanel merges both processes' spans into one array. */
 export const SERVICE_CHAT_AGENT = "agentorchestration-console-backend"
 export const SERVICE_TASK_AGENT = "agentorchestration-console-task-agent"
+export const SERVICE_MCP_TODOS = "agentorchestration-console-mcp-todos-server"
 
 export interface StoryNodeData {
   [key: string]: unknown
@@ -106,7 +107,8 @@ export const STORY_NODES: Array<{
       title: "MCP Todos Server",
       subtitle: "Tool + data + OBO audit log",
       kind: "data",
-      spanNames: [],
+      spanNames: ["mcp.tool_call", "authorize.mcp_tool_call"],
+      service: SERVICE_MCP_TODOS,
     },
   },
   {
@@ -292,7 +294,7 @@ export const STORY_EDGES: Array<{
     targetHandle: "left",
     label: "5. MCP tool call — forwards the SAME token one hop further",
     detail: "list_todos / add_todo / complete_todo — rebuilt fresh per task, not a cached connection.",
-    meta: {},
+    meta: { spanName: "mcp.tool_call", service: SERVICE_MCP_TODOS, attributeKeys: ["mcp.tool", "mcp.outcome"] },
   },
   {
     id: "e-verify-mcp",
@@ -303,6 +305,16 @@ export const STORY_EDGES: Array<{
     label: "Inbound auth — independently re-verifies, a third time",
     detail: "mcp-todos-server/app/mcp_server.py — plus its own policy ACL, not trusting task-agent's gate.",
     meta: {},
+  },
+  {
+    id: "e-mcp-authorize",
+    source: "mcp",
+    target: "authorize",
+    sourceHandle: "top2",
+    targetHandle: "bottom3",
+    label: "MCP tool PDP — evaluateMcpToolCall",
+    detail: "MCP sends the exchanged token as AccessToken plus mcpToolName; only PERMIT allows the call.",
+    meta: { spanName: "authorize.mcp_tool_call", service: SERVICE_MCP_TODOS, attributeKeys: ["policy.tool", "policy.result"] },
   },
   {
     id: "e-audit",
@@ -440,7 +452,8 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
   ],
   mcp: [
     { id: "left", type: "target", position: "left", offset: "50%" },
-    { id: "top", type: "source", position: "top", offset: "50%" },
+    { id: "top", type: "source", position: "top", offset: "35%" },
+    { id: "top2", type: "source", position: "top", offset: "65%" },
     { id: "bottom", type: "source", position: "bottom", offset: "50%" },
   ],
   audit: [{ id: "top", type: "target", position: "top", offset: "50%" }],

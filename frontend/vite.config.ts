@@ -24,6 +24,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/task-agent-api/, ''),
       },
+      '/mcp-todos-api': {
+        target: 'http://localhost:9000',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/mcp-todos-api/, ''),
+      },
     },
   },
 })

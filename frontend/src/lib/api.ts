@@ -89,6 +89,8 @@ export const api = {
    * data yet", not a hard error. */
   getTaskAgentTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/task-agent-api/telemetry"),
   clearTaskAgentTelemetry: () => getJson<{ cleared: number }>("/task-agent-api/telemetry", { method: "DELETE" }),
+  getMcpTodosTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/mcp-todos-api/telemetry"),
+  clearMcpTodosTelemetry: () => getJson<{ cleared: number }>("/mcp-todos-api/telemetry", { method: "DELETE" }),
   /** This service's half of the real token chain — decoded (+ raw) claims
    * for the user's own token, the orchestration agent's own Client
    * Credentials token, and the delegation token their Token Exchange

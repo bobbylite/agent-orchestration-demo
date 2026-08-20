@@ -118,12 +118,18 @@ mcpTodosServer:
     TODOS_READ_SCOPE: "todos:read"
     TODOS_WRITE_SCOPE: "todos:write"
     TODOS_DELETE_SCOPE: "todos:delete"
+    AUTHORIZE_DECISION_ENDPOINT: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
+    AUTHORIZE_SCOPE: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
+    AUTHORIZE_CLIENT_AUTH_METHOD: "client_secret_post"
     AGENT_DISPLAY_NAME: "Task Agent"
   secrets:
+    # The existing Secret must also contain the Authorize worker credentials.
     existingSecret: agentorchestration-mcp-todos-secrets
     create: false
     OIDC_CLIENT_SECRET: ""
     SESSION_SECRET: ""
+    AUTHORIZE_CLIENT_ID: ""
+    AUTHORIZE_CLIENT_SECRET: ""
   service:
     port: 9000
   resources: {}

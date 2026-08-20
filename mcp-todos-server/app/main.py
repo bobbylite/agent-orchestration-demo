@@ -12,6 +12,8 @@ what nothing else claimed.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,10 +23,19 @@ from app.mcp_server import mcp
 from app.routes.audit import router as audit_router
 from app.routes.health import router as health_router
 from app.routes.todos import router as todos_router
+from app.telemetry import clear_recent_spans, get_recent_spans, init_telemetry
 
 mcp_app = mcp.http_app(path="/mcp")
 
-app = FastAPI(title="Todos MCP Server", lifespan=mcp_app.lifespan)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_telemetry()
+    async with mcp_app.lifespan(app):
+        yield
+
+
+app = FastAPI(title="Todos MCP Server", lifespan=lifespan)
 
 _settings = get_settings()
 app.add_middleware(
@@ -39,5 +50,16 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(todos_router)
 app.include_router(audit_router)
+
+
+@app.get("/telemetry")
+async def telemetry() -> dict:
+    return {"spans": get_recent_spans()}
+
+
+@app.delete("/telemetry")
+async def clear_telemetry() -> dict:
+    return {"cleared": clear_recent_spans()}
+
 
 app.mount("/", mcp_app)

@@ -59,11 +59,11 @@ function StoryEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, tar
           </circle>
         </>
       )}
-      <foreignObject x={labelX - 90} y={labelY - 16} width={180} height={34} className="pointer-events-none overflow-visible">
+      <foreignObject x={labelX - 120} y={labelY - 24} width={240} height={48} className="pointer-events-none overflow-visible">
         <div className="flex justify-center">
           <span
             title={meta.detail}
-            className="pointer-events-auto max-w-full truncate rounded-md border border-border bg-canvas px-1.5 py-0.5 text-center text-[9.5px] font-medium text-ink-muted shadow-card"
+            className="pointer-events-auto max-w-[230px] whitespace-normal rounded-md border border-border bg-canvas px-2 py-1 text-center text-[9.5px] font-medium leading-tight text-ink-muted shadow-card"
           >
             {meta.label}
           </span>

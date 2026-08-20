@@ -435,7 +435,8 @@ Keep replicas at one initially because todos, telemetry, audit entries, and toke
 
 ## Deployed demo URLs
 
-The current Kubernetes deployment exposes two browser origins:
+The current Kubernetes deployment exposes two browser origins. MCP telemetry is also merged into the chat console's OpenTelemetry panel through the `/mcp-todos-api/telemetry` proxy:
+
 
 - Chat console: https://rluisi-agent-orchestration-client.ping-devops.com
 - Todos UI: https://rluisi-agent-orchestration-todos.ping-devops.com

@@ -22,7 +22,8 @@ from fastmcp.server.dependencies import get_http_request
 
 from agentorchestration_shared import InboundAuthError, VerifiedIdentity, verify_bearer_token
 
-from app import audit, identity, policy, store
+from app import audit, authorize, identity, policy, store
+from app.telemetry import with_span
 from app.config import get_settings
 
 mcp = FastMCP("Todos")
@@ -79,6 +80,18 @@ async def _authorize(tool_name: str) -> VerifiedIdentity:
         _record(tool_name, "denied", caller, detail=detail)
         raise ToolError(detail)
 
+    with with_span("authorize.mcp_tool_call", {"policy.tool": tool_name}) as span:
+        permitted, reason = await authorize.check_tool_call(
+            get_settings(), access_token=(get_http_request().headers.get("authorization", "").removeprefix("Bearer ").strip()), tool_name=tool_name
+        )
+        span.set_attribute("policy.result", "permit" if permitted else "deny")
+        if not permitted:
+            detail = f"MCP Authorize PDP denied '{tool_name}': {reason}"
+            _record(tool_name, "denied", caller, detail=detail)
+            raise ToolError(detail)
+
+    with with_span("mcp.tool_call", {"mcp.tool": tool_name}) as span:
+        span.set_attribute("mcp.outcome", "authorized")
     return caller
 
 

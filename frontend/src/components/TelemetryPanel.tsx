@@ -31,12 +31,13 @@ export function TelemetryPanel() {
     let cancelled = false
     async function poll() {
       const generation = pollGeneration.current
-      // Two independent processes (backend + task-agent), each best-effort:
-      // task-agent may not be running in every demo, so a failure fetching
-      // its spans shouldn't blank out the Chat Agent's. Merge by start_time
-      // rather than concatenating — polls land at different times and each
-      // endpoint's own ring buffer is only locally ordered.
-      const results = await Promise.allSettled([api.getTelemetry(), api.getTaskAgentTelemetry()])
+      // Three independent processes (backend, task-agent, and MCP), each
+      // best-effort. A service being down should not blank out the others.
+      const results = await Promise.allSettled([
+        api.getTelemetry(),
+        api.getTaskAgentTelemetry(),
+        api.getMcpTodosTelemetry(),
+      ])
       const merged = results.flatMap((r) => (r.status === "fulfilled" ? r.value.spans : []))
       merged.sort((a, b) => a.start_time - b.start_time)
       if (!cancelled && generation === pollGeneration.current) setSpans(merged)
@@ -66,7 +67,11 @@ export function TelemetryPanel() {
               pollGeneration.current += 1
               setSpans([])
               setClearing(true)
-              await Promise.allSettled([api.clearTelemetry(), api.clearTaskAgentTelemetry()])
+              await Promise.allSettled([
+                api.clearTelemetry(),
+                api.clearTaskAgentTelemetry(),
+                api.clearMcpTodosTelemetry(),
+              ])
               setClearing(false)
             }}
             className="rounded-md border border-border bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-ink-muted transition hover:bg-code-bg disabled:opacity-50"

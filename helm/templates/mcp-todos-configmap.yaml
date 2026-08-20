@@ -14,6 +14,9 @@ data:
   TODOS_READ_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_WRITE_SCOPE | quote }}
   TODOS_DELETE_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_DELETE_SCOPE | quote }}
+  AUTHORIZE_DECISION_ENDPOINT: {{ .Values.mcpTodosServer.env.AUTHORIZE_DECISION_ENDPOINT | quote }}
+  AUTHORIZE_SCOPE: {{ .Values.mcpTodosServer.env.AUTHORIZE_SCOPE | quote }}
+  AUTHORIZE_CLIENT_AUTH_METHOD: {{ .Values.mcpTodosServer.env.AUTHORIZE_CLIENT_AUTH_METHOD | quote }}
   AGENT_DISPLAY_NAME: {{ .Values.mcpTodosServer.env.AGENT_DISPLAY_NAME | quote }}
   APP_BASE_URL: {{ .Values.mcpTodosServer.env.APP_BASE_URL | quote }}
   FRONTEND_ORIGIN: {{ .Values.mcpTodosServer.env.FRONTEND_ORIGIN | quote }}

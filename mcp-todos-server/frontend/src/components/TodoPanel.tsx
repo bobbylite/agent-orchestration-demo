@@ -75,6 +75,18 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
     }
   }
 
+  async function handleDelete(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
+    if (!previous || !window.confirm(`Delete “${previous.text}”? This cannot be undone.`)) return
+    setTodos((prev) => prev.filter((todo) => todo.id !== id))
+    try {
+      await api.deleteTodo(id)
+      onActivity()
+    } catch {
+      setTodos((prev) => (prev.some((todo) => todo.id === id) ? prev : [...prev, previous]))
+    }
+  }
+
   if (!signedIn) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
@@ -113,7 +125,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         ) : (
           <ul className="flex flex-col gap-3">
             {todos.map((todo) => (
-              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} onReopen={handleReopen} />
+              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} onReopen={handleReopen} onDelete={handleDelete} />
             ))}
           </ul>
         )}

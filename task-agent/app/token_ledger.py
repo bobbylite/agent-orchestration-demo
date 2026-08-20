@@ -6,10 +6,10 @@ Chain panel was opened. Mirrors backend/app/auth/token_ledger.py's shape —
 same "in-memory, single global buffer, demo-scale" convention as
 app/telemetry.py's RecordingSpanProcessor.
 
-Two mcp-scoped slots, not one — "read" and "write" are tracked
+Three mcp-scoped slots, not one — "read", "write", and "delete" are tracked
 independently (keyed by which scope was actually granted) rather than one
-"latest of either" slot, so the Token Chain panel can show BOTH a
-read-scoped and a write-scoped MCP token side by side once each has been
+"latest of either" slot, so the Token Chain panel can show separate
+read-scoped, write-scoped, and delete-scoped MCP tokens once each has been
 used at least once. That's deliberate: collapsing them into a single
 "latest" slot would hide the exact "a read succeeding never implies a write
 was granted, and vice versa" story this service's step-up scoping exists to
@@ -26,6 +26,7 @@ _ledger: dict[str, dict[str, Any] | None] = {
     "task_agent_own": None,
     "mcp_scoped_read": None,
     "mcp_scoped_write": None,
+    "mcp_scoped_delete": None,
 }
 
 

@@ -128,3 +128,16 @@ async def reopen_todo(todo_id: str) -> dict:
         raise ToolError(str(exc)) from exc
     _record("reopen_todo", "success", caller)
     return todo
+
+
+@mcp.tool
+async def delete_todo(todo_id: str) -> dict:
+    """Delete a todo permanently and return the deleted object."""
+    caller = await _authorize("delete_todo")
+    try:
+        todo = store.delete_todo(todo_id)
+    except KeyError as exc:
+        _record("delete_todo", "error", caller, detail=str(exc))
+        raise ToolError(str(exc)) from exc
+    _record("delete_todo", "success", caller)
+    return todo

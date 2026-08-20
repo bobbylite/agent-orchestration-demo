@@ -5,6 +5,7 @@ interface Props {
   todo: Todo
   onComplete: (id: string) => void
   onReopen: (id: string) => void
+  onDelete: (id: string) => void
 }
 
 function formatTime(iso: string): string {
@@ -20,7 +21,7 @@ function formatTime(iso: string): string {
   }
 }
 
-export function TodoItem({ todo, onComplete, onReopen }: Props) {
+export function TodoItem({ todo, onComplete, onReopen, onDelete }: Props) {
   const creator = todo.creator_label ?? todo.creator_sub ?? "Unknown"
 
   return (
@@ -41,7 +42,17 @@ export function TodoItem({ todo, onComplete, onReopen }: Props) {
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <p className={`text-sm ${todo.done ? "text-ink-muted line-through" : "text-ink"}`}>{todo.text}</p>
-          <CreatorBadge createdBy={todo.created_by} />
+          <div className="flex items-center gap-2">
+            <CreatorBadge createdBy={todo.created_by} />
+            <button
+              type="button"
+              onClick={() => onDelete(todo.id)}
+              aria-label={`Delete ${todo.text}`}
+              className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-danger transition hover:bg-danger-bg"
+            >
+              Delete
+            </button>
+          </div>
         </div>
         <p className="mt-1 truncate text-[11px] text-ink-muted" title={creator}>
           {todo.created_by === "agent" ? "On behalf of " : "by "}

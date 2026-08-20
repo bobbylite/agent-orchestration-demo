@@ -233,6 +233,22 @@
           ] } }]
         },
         {
+          "name": "Delete todo",
+          "request": { "method": "DELETE", "header": [], "url": "{{todos_url}}/api/todos/{{todo_id}}" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('Delete todo returns 200', function () { pm.response.to.have.status(200); });",
+            "pm.test('Deleted todo id matches', function () { pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('todo_id')); });"
+          ] } }]
+        },
+        {
+          "name": "Confirm todo deleted",
+          "request": { "method": "GET", "header": [], "url": "{{todos_url}}/api/todos" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('List todos returns 200', function () { pm.response.to.have.status(200); });",
+            "pm.test('Deleted todo is absent', function () { pm.expect((pm.response.json().todos || []).some(function (todo) { return todo.id === pm.collectionVariables.get('todo_id'); })).to.eql(false); });"
+          ] } }]
+        },
+        {
           "name": "Read audit log",
           "request": { "method": "GET", "header": [], "url": "{{todos_url}}/api/audit" },
           "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [

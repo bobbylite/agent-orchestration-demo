@@ -146,7 +146,7 @@ answer questions about a todo list; everything else works without them)
 # terminal 3
 cd mcp-todos-server
 cp .env.example .env   # PingOne app #4 (its own UI) + own audience
-                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE
+                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE / TODOS_DELETE_SCOPE
 uv sync
 uv run uvicorn app.main:app --port 9000   # MCP endpoint at /mcp, its UI's API at /api/*
 
@@ -251,12 +251,12 @@ as #2, one hop later:
 as #3, one hop later:
 - Grant type: **Token Exchange**
 - Token endpoint auth method: `client_secret_basic`
-- Define `todos:read` and `todos:write` (or your own names — keep
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` matching) as scopes on a resource
+- Define `todos:read`, `todos:write`, and `todos:delete` (or your own names — keep
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` matching) as scopes on a resource
   whose **audience is the MCP server's own URL**
   (`http://localhost:9000/mcp`) and whose access token format is **JWT**
 - → `TODOS_MCP_CLIENT_ID`, `TODOS_MCP_CLIENT_SECRET`,
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` (`task-agent/.env`)
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` (`task-agent/.env`)
 
 All six are independent — you can enable just the sign-in app first, add
 the rest as you go; each pair only unlocks once both its apps are filled in.
@@ -290,7 +290,7 @@ propagates onto the token task-agent receives (see `CLAUDE.md`'s
 `ALLOWED_AGENT_CLIENT_ID` must be app #5's client_id
 (`TASK_AGENT_CLIENT_ID`), for the same reason, one hop later.
 `task-agent/.env` and `mcp-todos-server/.env`'s `TODOS_READ_SCOPE`/
-`TODOS_WRITE_SCOPE` must match each other exactly (`backend/.env` doesn't
+`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` must match each other exactly (`backend/.env` doesn't
 have these settings at all anymore).
 
 ## Claude Desktop as the orchestrator (optional)
@@ -358,6 +358,10 @@ second, independent origin (`http://localhost:8081`, service
 `mcp-todos-server-frontend`) — register *that* origin's
 `/api/auth/callback` with PingOne app #3, and set
 `MCP_TODOS_PUBLIC_ORIGIN=http://localhost:8081` (or your real domain).
+The Todos UI supports human add, complete, reopen, and delete operations;
+delete requires an explicit confirmation. The orchestration agent's
+`delete_todo` operation uses a separate `todos:delete` scope and must be
+permitted on the MCP resource and token-exchange client in PingOne.
 Keeping each frontend/backend pair behind its own single public origin
 means each session cookie stays host-scoped without any cross-site cookie
 configuration.

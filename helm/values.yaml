@@ -62,6 +62,7 @@ taskAgent:
     MCP_TODOS_AUDIENCE: "http://localhost:9000/mcp"
     TODOS_READ_SCOPE: "todos:read"
     TODOS_WRITE_SCOPE: "todos:write"
+    TODOS_DELETE_SCOPE: "todos:delete"
     AUTHORIZE_DECISION_ENDPOINT: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
     AUTHORIZE_SCOPE: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
     AUTHORIZE_CLIENT_AUTH_METHOD: "client_secret_post"
@@ -116,6 +117,7 @@ mcpTodosServer:
     ALLOWED_AGENT_CLIENT_ID: "CHANGE_ME"
     TODOS_READ_SCOPE: "todos:read"
     TODOS_WRITE_SCOPE: "todos:write"
+    TODOS_DELETE_SCOPE: "todos:delete"
     AGENT_DISPLAY_NAME: "Task Agent"
   secrets:
     existingSecret: agentorchestration-mcp-todos-secrets

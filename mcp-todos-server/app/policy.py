@@ -22,6 +22,7 @@ def _identity_acl() -> dict[str, set[str]]:
         "add_todo": allowed,
         "complete_todo": allowed,
         "reopen_todo": allowed,
+        "delete_todo": allowed,
     }
 
 
@@ -32,6 +33,7 @@ def _required_scope() -> dict[str, str]:
         "add_todo": settings.todos_write_scope,
         "complete_todo": settings.todos_write_scope,
         "reopen_todo": settings.todos_write_scope,
+        "delete_todo": settings.todos_delete_scope,
     }
 
 

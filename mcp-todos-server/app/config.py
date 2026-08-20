@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     allowed_agent_client_id: str | None = Field(default=None)
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+    todos_delete_scope: str = Field(default="todos:delete")
 
     # Friendly label for the audit log ("Agent Task Agent used ..." instead
     # of a raw client_id) — purely cosmetic, defaults to the client_id.

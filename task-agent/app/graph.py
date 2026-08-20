@@ -127,6 +127,7 @@ _REQUIRED_SCOPE_SETTING = {
     "add_todo": "todos_write_scope",
     "complete_todo": "todos_write_scope",
     "reopen_todo": "todos_write_scope",
+    "delete_todo": "todos_delete_scope",
 }
 
 
@@ -196,7 +197,11 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         )
         if not isinstance(mcp_token, str) or not mcp_token:
             return ToolMessage(content="Denied: the todos task token was invalid.", tool_call_id=request.tool_call["id"])
-        ledger_slot = "mcp_scoped_read" if scope_setting == "todos_read_scope" else "mcp_scoped_write"
+        ledger_slot = {
+            "todos_read_scope": "mcp_scoped_read",
+            "todos_write_scope": "mcp_scoped_write",
+            "todos_delete_scope": "mcp_scoped_delete",
+        }[scope_setting]
         token_ledger.record(ledger_slot, mcp_token, tool=tool_name)
     except httpx.HTTPStatusError as exc:
         return ToolMessage(
@@ -234,7 +239,7 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
 _SYSTEM = SystemMessage(
     content=(
         "You are the Task Agent, a specialist backend agent that manages a todo list via MCP "
-        "tools (list_todos, add_todo, complete_todo, reopen_todo). Your final answer is consumed by another "
+        "tools (list_todos, add_todo, complete_todo, reopen_todo, delete_todo). Your final answer is consumed by another "
         "AI agent (the Chat Agent), not read directly by a human, so preserve structured details "
         "instead of writing a purely prose summary that drops them.\n\n"
         "Every todo has an `id`. Whenever you report todos — after list_todos, or after "
@@ -247,6 +252,10 @@ _SYSTEM = SystemMessage(
         "by id, call list_todos first, match the text case-insensitively, and then call reopen_todo "
         "with the matching id. If there is no match, report that without mutating anything; if "
         "there are multiple matches, ask for clarification. Report the todo id and done=false.\n\n"
+        "If you're asked to delete or remove a todo by name or description rather than by id, call "
+        "list_todos first, match the text case-insensitively, and then call delete_todo only for a "
+        "single unambiguous match. If there is no match, report that without mutating anything; if "
+        "there are multiple matches, ask for clarification. Report the deleted todo id and text.\n\n"
         "If a tool call is denied or fails, explain the real reason plainly and concisely."
     )
 )

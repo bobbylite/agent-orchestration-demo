@@ -13,6 +13,7 @@ data:
   MCP_TODOS_AUDIENCE: {{ include "agentorchestration.mcpTodosAudience" . | quote }}
   TODOS_READ_SCOPE: {{ .Values.taskAgent.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.taskAgent.env.TODOS_WRITE_SCOPE | quote }}
+  TODOS_DELETE_SCOPE: {{ .Values.taskAgent.env.TODOS_DELETE_SCOPE | quote }}
   AUTHORIZE_DECISION_ENDPOINT: {{ .Values.taskAgent.env.AUTHORIZE_DECISION_ENDPOINT | quote }}
   AUTHORIZE_SCOPE: {{ .Values.taskAgent.env.AUTHORIZE_SCOPE | quote }}
   AUTHORIZE_CLIENT_AUTH_METHOD: {{ .Values.taskAgent.env.AUTHORIZE_CLIENT_AUTH_METHOD | quote }}

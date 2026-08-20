@@ -131,8 +131,9 @@ async def ask_task_agent_read(request: str, config: RunnableConfig) -> str:
 @tool
 async def ask_task_agent_write(request: str, config: RunnableConfig) -> str:
     """Delegate a WRITE request to the Task Agent — use this for adding a
-    new todo, completing one, reopening/undoing completion, or any other
-    change to the user's todo list. Describe what to do in plain language
-    (e.g. "mark 'buy milk' as complete" or "reopen 'buy milk'") — you do
-    not need a todo's internal id first; the Task Agent looks it up itself."""
+    new todo, completing one, reopening/undoing completion, deleting one, or
+    any other change to the user's todo list. Describe what to do in plain
+    language (e.g. "mark 'buy milk' as complete", "reopen 'buy milk'", or
+    "delete 'buy milk'") — you do not need a todo's internal id first; the
+    Task Agent looks it up itself. Deletion requires an explicit user request."""
     return await _delegate(request, config, intent="write")

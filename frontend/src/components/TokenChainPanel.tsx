@@ -14,6 +14,7 @@ interface ChainData {
   taskAgentOwn: TokenLedgerEntry | null
   mcpRead: TokenLedgerEntry | null
   mcpWrite: TokenLedgerEntry | null
+  mcpDelete: TokenLedgerEntry | null
 }
 
 const EMPTY: ChainData = {
@@ -23,6 +24,7 @@ const EMPTY: ChainData = {
   taskAgentOwn: null,
   mcpRead: null,
   mcpWrite: null,
+  mcpDelete: null,
 }
 
 export function TokenChainPanel({ onClose }: Props) {
@@ -53,6 +55,7 @@ export function TokenChainPanel({ onClose }: Props) {
         taskAgentOwn: taskResult.status === "fulfilled" ? taskResult.value.task_agent_own : null,
         mcpRead: taskResult.status === "fulfilled" ? taskResult.value.mcp_scoped_read : null,
         mcpWrite: taskResult.status === "fulfilled" ? taskResult.value.mcp_scoped_write : null,
+        mcpDelete: taskResult.status === "fulfilled" ? taskResult.value.mcp_scoped_delete : null,
       })
     }
     poll()
@@ -178,16 +181,25 @@ export function TokenChainPanel({ onClose }: Props) {
               <TokenCard
                 compact
                 title="MCP Token — todos:write"
-                subtitle={data.mcpWrite?.tool ? `last used by ${data.mcpWrite.tool}` : "add_todo / complete_todo"}
+                subtitle={data.mcpWrite?.tool ? `last used by ${data.mcpWrite.tool}` : "add_todo / complete_todo / reopen_todo"}
                 accent="var(--warning)"
                 entry={data.mcpWrite}
-                placeholder="Not used yet — ask to add or complete a todo."
+                placeholder="Not used yet — ask to add, complete, or reopen a todo."
+                highlightSubMatch={userSub}
+              />
+              <TokenCard
+                compact
+                title="MCP Token — todos:delete"
+                subtitle={data.mcpDelete?.tool ? `last used by ${data.mcpDelete.tool}` : "delete_todo"}
+                accent="var(--danger)"
+                entry={data.mcpDelete}
+                placeholder="Not used yet — ask to delete a todo."
                 highlightSubMatch={userSub}
               />
             </div>
             <p className="mt-4 text-center text-[10.5px] leading-relaxed text-ink-muted/70">
-              Read and write tokens are independent — each is requested fresh, per call, from PingOne. One
-              succeeding never implies the other was ever granted.
+              Read, write, and delete tokens are independent — each is requested fresh, per call, from PingOne. One
+              succeeding never implies the others were ever granted.
             </p>
           </div>
         </div>

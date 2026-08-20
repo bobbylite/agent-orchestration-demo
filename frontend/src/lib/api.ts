@@ -37,6 +37,7 @@ export interface TaskAgentTokenChainResponse {
   task_agent_own: TokenLedgerEntry | null
   mcp_scoped_read: TokenLedgerEntry | null
   mcp_scoped_write: TokenLedgerEntry | null
+  mcp_scoped_delete: TokenLedgerEntry | null
 }
 
 export interface AuthorizeDecisionEntry {

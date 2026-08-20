@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     # granted scope on every MCP tool call.
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+    todos_delete_scope: str = Field(default="todos:delete")
 
     # PingOne Authorize decision endpoint. The worker app is used only to
     # authenticate the decision request; the delegated token is supplied to

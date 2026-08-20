@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: task-agent
     spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: task-agent
           image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.taskAgent.image) }}
@@ -28,7 +32,19 @@ spec:
               containerPort: {{ .Values.taskAgent.service.port }}
               protocol: TCP
           envFrom:
+            - configMapRef:
+                name: {{ include "agentorchestration.fullname" . }}-task-agent-config
             - secretRef:
-                name: {{ include "agentorchestration.fullname" . }}-task-agent
+                name: {{ default (printf "%s-task-agent" (include "agentorchestration.fullname" .)) .Values.taskAgent.secrets.existingSecret }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.taskAgent.resources | nindent 12 }}

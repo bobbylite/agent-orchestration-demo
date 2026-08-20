@@ -19,17 +19,23 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: backend
     spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: backend
-          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.backend.image) }}
+          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.backend.image "nameTag" .Values.backend.imageTag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
               containerPort: {{ .Values.backend.service.port }}
               protocol: TCP
           envFrom:
+            - configMapRef:
+                name: {{ include "agentorchestration.fullname" . }}-backend-config
             - secretRef:
-                name: {{ include "agentorchestration.fullname" . }}-backend
+                name: {{ default (printf "%s-backend" (include "agentorchestration.fullname" .)) .Values.backend.secrets.existingSecret }}
           livenessProbe:
             httpGet:
               path: /api/health

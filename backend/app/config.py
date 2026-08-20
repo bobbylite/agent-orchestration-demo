@@ -92,8 +92,11 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = Field(default=None)
     langsmith_project: str = Field(default="Todos")
 
-    # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent
+    # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent.
+    # This is the network URL used for the A2A call. It may differ from the
+    # PingOne audience carried by the delegation token in Kubernetes.
     task_agent_url: str = Field(default="http://localhost:9010")
+    task_agent_expected_audience: str | None = Field(default=None)
 
     # Networking
     app_base_url: str = Field(default="http://localhost:8000")

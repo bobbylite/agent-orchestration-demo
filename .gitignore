@@ -16,3 +16,5 @@ frontend/dist/
 
 # OS
 .DS_Store
+helm/values-pingidentity.yaml
+helm/values.yaml

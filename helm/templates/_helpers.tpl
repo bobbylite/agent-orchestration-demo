@@ -43,7 +43,7 @@ Image reference helper — registry/name:tag
 {{- define "agentorchestration.image" -}}
 {{- $reg := .root.Values.image.registry -}}
 {{- $name := .name -}}
-{{- $tag := .root.Values.image.tag -}}
+{{- $tag := default .root.Values.image.tag .nameTag -}}
 {{- if $reg -}}
 {{- printf "%s/%s:%s" $reg $name $tag -}}
 {{- else -}}
@@ -68,6 +68,10 @@ Cluster-internal Service name helpers
 
 {{- define "agentorchestration.frontendSvcName" -}}
 {{- printf "%s-frontend" (include "agentorchestration.fullname" .) }}
+{{- end }}
+
+{{- define "agentorchestration.todosUiSvcName" -}}
+{{- printf "%s-todos-ui" (include "agentorchestration.fullname" .) }}
 {{- end }}
 
 {{/*
@@ -98,6 +102,14 @@ Resolved MCP_TODOS_URL for the task-agent.
 {{- define "agentorchestration.mcpTodosUrl" -}}
 {{- if .Values.taskAgent.env.MCP_TODOS_URL -}}
 {{- .Values.taskAgent.env.MCP_TODOS_URL -}}
+{{- else -}}
+{{- printf "http://%s:%d/mcp" (include "agentorchestration.mcpTodosSvcName" .) (.Values.mcpTodosServer.service.port | int) -}}
+{{- end -}}
+{{- end }}
+
+{{- define "agentorchestration.mcpTodosAudience" -}}
+{{- if .Values.taskAgent.env.MCP_TODOS_AUDIENCE -}}
+{{- .Values.taskAgent.env.MCP_TODOS_AUDIENCE -}}
 {{- else -}}
 {{- printf "http://%s:%d/mcp" (include "agentorchestration.mcpTodosSvcName" .) (.Values.mcpTodosServer.service.port | int) -}}
 {{- end -}}

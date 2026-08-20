@@ -65,7 +65,9 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                 # its own to verify against its own audience. See
                 # CLAUDE.md (2026-08-16 redesign, in progress).
                 identity = await verify_inbound_token(
-                    candidate_token, settings, expected_audience=settings.task_agent_url
+                    candidate_token,
+                    settings,
+                    expected_audience=settings.task_agent_expected_audience or settings.task_agent_url,
                 )
             except InboundAuthError as exc:
                 # Present but no longer valid (expired, tampered, wrong

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentorchestration.fullname" . }}-backend-config
+  labels:
+    {{- include "agentorchestration.labels" . | nindent 4 }}
+data:
+  APP_BASE_URL: {{ .Values.backend.env.APP_BASE_URL | quote }}
+  FRONTEND_ORIGIN: {{ .Values.backend.env.FRONTEND_ORIGIN | quote }}
+  OIDC_DISCOVERY_URL: {{ .Values.backend.env.OIDC_DISCOVERY_URL | quote }}
+  OIDC_CLIENT_ID: {{ .Values.backend.env.OIDC_CLIENT_ID | quote }}
+  OIDC_SCOPES: {{ .Values.backend.env.OIDC_SCOPES | quote }}
+  OIDC_POST_LOGOUT_REDIRECT_URI: {{ .Values.backend.env.OIDC_POST_LOGOUT_REDIRECT_URI | quote }}
+  AGENT_CLIENT_ID: {{ .Values.backend.env.AGENT_CLIENT_ID | quote }}
+  AGENT_OWN_SCOPE: {{ .Values.backend.env.AGENT_OWN_SCOPE | quote }}
+  AGENT_DELEGATION_CLIENT_ID: {{ .Values.backend.env.AGENT_DELEGATION_CLIENT_ID | quote }}
+  AGENT_DELEGATION_SCOPE: {{ .Values.backend.env.AGENT_DELEGATION_SCOPE | quote }}
+  AGENT_EXPECTED_AUDIENCE: {{ .Values.backend.env.AGENT_EXPECTED_AUDIENCE | quote }}
+  AGENT_MODEL: {{ .Values.backend.env.AGENT_MODEL | quote }}
+  MODEL_PROVIDER: {{ .Values.backend.env.MODEL_PROVIDER | quote }}
+  MODEL_ID: {{ .Values.backend.env.MODEL_ID | quote }}
+  GROQ_MODEL: {{ .Values.backend.env.GROQ_MODEL | quote }}
+  LANGSMITH_TRACING: {{ .Values.backend.env.LANGSMITH_TRACING | quote }}
+  LANGSMITH_ENDPOINT: {{ .Values.backend.env.LANGSMITH_ENDPOINT | quote }}
+  LANGSMITH_PROJECT: {{ .Values.backend.env.LANGSMITH_PROJECT | quote }}
+  TASK_AGENT_URL: {{ include "agentorchestration.taskAgentUrl" . | quote }}
+  TASK_AGENT_EXPECTED_AUDIENCE: {{ .Values.backend.env.TASK_AGENT_EXPECTED_AUDIENCE | quote }}

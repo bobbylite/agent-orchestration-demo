@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: mcp-todos-server
     spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: mcp-todos-server
           image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.mcpTodosServer.image) }}
@@ -27,5 +31,22 @@ spec:
             - name: http
               containerPort: {{ .Values.mcpTodosServer.service.port }}
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "agentorchestration.fullname" . }}-mcp-todos-config
+            - secretRef:
+                name: {{ default (printf "%s-mcp-todos" (include "agentorchestration.fullname" .)) .Values.mcpTodosServer.secrets.existingSecret }}
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.mcpTodosServer.resources | nindent 12 }}

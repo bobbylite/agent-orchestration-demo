@@ -29,11 +29,11 @@ export default function App() {
   const signedIn = Boolean(me?.signed_in)
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
-      <header className="z-10 flex shrink-0 items-center justify-between border-b border-border bg-canvas-raised px-7 py-4 shadow-card">
-        <div>
-          <h1 className="text-[15px] font-semibold tracking-tight">Todos — Agent Orchestration Console</h1>
-          <p className="text-xs text-ink-muted">MCP tool server · PingOne identity · OBO audit log</p>
+    <div className="flex h-[100dvh] min-h-[100dvh] min-w-0 flex-col overflow-hidden bg-canvas text-ink">
+      <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-canvas-raised px-3 py-3 shadow-card sm:flex-nowrap sm:px-7 sm:py-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-xs font-semibold tracking-tight sm:text-[15px]">Todos — Agent Orchestration Console</h1>
+          <p className="hidden text-xs text-ink-muted sm:block">MCP tool server · PingOne identity · OBO audit log</p>
         </div>
         <div className="flex items-center gap-3">
           <SignInButton me={me} />
@@ -42,12 +42,12 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1">
-        <section className="min-h-0 flex-1 border-r border-border bg-canvas-raised">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
+        <section className="min-h-0 min-w-0 flex-1 border-b border-border bg-canvas-raised xl:border-b-0 xl:border-r">
           <TodoPanel signedIn={signedIn} onActivity={bumpActivity} />
         </section>
 
-        <aside className="flex min-h-0 w-[30rem] shrink-0 flex-col bg-canvas-raised">
+        <aside className="flex h-[min(42dvh,30rem)] min-h-0 w-full shrink-0 flex-col bg-canvas-raised xl:h-auto xl:w-[30rem]">
           <AuditLogPanel signedIn={signedIn} refreshSignal={activityVersion} />
         </aside>
       </main>

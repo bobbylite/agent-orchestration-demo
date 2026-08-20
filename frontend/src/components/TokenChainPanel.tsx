@@ -75,14 +75,14 @@ export function TokenChainPanel({ onClose }: Props) {
     [data.delegation, data.mcpRead, data.mcpWrite].some((e) => e && claimString(e, "sub") === userSub)
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-6 backdrop-blur-sm">
-      <div className="flex h-full w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-border bg-canvas shadow-floating">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-2 backdrop-blur-sm sm:p-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="token-chain-title" className="flex max-h-[calc(100dvh-1rem)] h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-canvas shadow-floating sm:rounded-2xl">
         <div
-          className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4"
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-3 py-3 sm:px-6 sm:py-4"
           style={{ backgroundImage: "linear-gradient(120deg, color-mix(in srgb, var(--brand) 10%, transparent), transparent 60%)" }}
         >
           <div>
-            <h2 className="text-sm font-semibold tracking-tight text-ink">Token Chain — real, decoded JWTs</h2>
+            <h2 id="token-chain-title" className="text-sm font-semibold tracking-tight text-ink">Token Chain — real, decoded JWTs</h2>
             <p className="text-xs text-ink-muted">
               Every RFC 8693 exchange in this session, in order — what was minted, what fed into what, and whether
               the human's identity survived the whole hop.
@@ -99,14 +99,14 @@ export function TokenChainPanel({ onClose }: Props) {
               type="button"
               onClick={onClose}
               aria-label="Close token chain"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
+              className="touch-target flex h-11 w-11 shrink-0 items-center justify-center sm:h-8 sm:w-8 rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
             >
               <CloseIcon />
             </button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-6 sm:py-5">
           <div className="mx-auto flex max-w-lg flex-col">
             <StageLabel text="Step 0 — the human signs in" />
             <TokenCard
@@ -119,7 +119,7 @@ export function TokenChainPanel({ onClose }: Props) {
 
             <FlowLine active={Boolean(data.user)} />
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <TokenCard
                 compact
                 title="Orchestration Agent Token"
@@ -149,7 +149,7 @@ export function TokenChainPanel({ onClose }: Props) {
 
             <FlowLine active={Boolean(data.delegation)} />
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <ExchangeGhostCard label="Delegation Token (from above)" />
               <TokenCard
                 compact
@@ -168,7 +168,7 @@ export function TokenChainPanel({ onClose }: Props) {
               resultLabel="MCP-scoped Token (read or write, decided fresh per call)"
             />
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <TokenCard
                 compact
                 title="MCP Token — todos:read"

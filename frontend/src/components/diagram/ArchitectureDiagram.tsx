@@ -124,11 +124,11 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
   )
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-6 backdrop-blur-sm">
-      <div className="flex h-full w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-canvas shadow-floating">
-        <div className="flex shrink-0 items-center justify-between border-b border-border bg-canvas-raised px-6 py-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-2 backdrop-blur-sm sm:p-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="architecture-diagram-title" className="flex max-h-[calc(100dvh-1rem)] h-full w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-border bg-canvas shadow-floating sm:rounded-2xl">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-canvas-raised px-3 py-3 sm:px-6 sm:py-4">
           <div>
-            <h2 className="text-sm font-semibold tracking-tight text-ink">How this works — identity &amp; data flow</h2>
+            <h2 id="architecture-diagram-title" className="text-sm font-semibold tracking-tight text-ink">How this works — identity &amp; data flow</h2>
             <p className="text-xs text-ink-muted">
               Two front doors, one security chain — every hop re-verifies its own token fresh, no matter which
               orchestrator the request came through.
@@ -138,7 +138,7 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
             type="button"
             onClick={onClose}
             aria-label="Close diagram"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
+            className="touch-target flex h-11 w-11 shrink-0 items-center justify-center sm:h-8 sm:w-8 rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
           >
             <CloseIcon />
           </button>
@@ -156,14 +156,14 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
             nodesDraggable={false}
             edgesFocusable={false}
             proOptions={{ hideAttribution: true }}
-            minZoom={0.4}
-            maxZoom={1.5}
+            minZoom={0.25}
+            maxZoom={2}
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
             <Controls showInteractive={false} className="diagram-controls" />
           </ReactFlow>
 
-          <div className="pointer-events-none absolute bottom-4 left-4 w-64 rounded-xl border border-border bg-canvas-raised/95 p-3.5 text-[11px] shadow-raised backdrop-blur">
+          <div className="pointer-events-none absolute bottom-4 left-4 hidden w-64 rounded-xl sm:block border border-border bg-canvas-raised/95 p-3.5 text-[11px] shadow-raised backdrop-blur">
             <p className="mb-2 text-[10px] font-semibold tracking-wide text-ink-muted uppercase">Identity structure</p>
             <dl className="flex flex-col gap-1.5 font-mono text-[10.5px]">
               <div className="flex justify-between gap-2">
@@ -189,7 +189,7 @@ export function ArchitectureDiagram({ spans, onClose }: Props) {
             </p>
           </div>
 
-          <div className="pointer-events-none absolute bottom-4 right-4 flex items-center gap-3 rounded-xl border border-border bg-canvas-raised/95 px-3.5 py-2 text-[10.5px] text-ink-muted shadow-raised backdrop-blur">
+          <div className="pointer-events-none absolute bottom-4 right-4 hidden items-center gap-3 sm:flex rounded-xl border border-border bg-canvas-raised/95 px-3.5 py-2 text-[10.5px] text-ink-muted shadow-raised backdrop-blur">
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-6 rounded-full" style={{ backgroundColor: "var(--brand)" }} />
               live in this panel

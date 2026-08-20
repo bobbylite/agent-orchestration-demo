@@ -106,7 +106,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-3.5 sm:px-5">
         <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Todos</h2>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
@@ -116,7 +116,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-5">
         {todos.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             <p className="text-sm text-ink-muted">No todos yet.</p>
@@ -131,12 +131,12 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex shrink-0 gap-2.5 border-t border-border p-4">
+      <form onSubmit={handleSubmit} className="flex shrink-0 gap-2.5 border-t border-border p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Add a todo…"
-          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none"
+          className="min-w-0 min-h-11 flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none"
         />
         <button
           type="submit"

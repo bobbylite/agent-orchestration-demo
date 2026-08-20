@@ -25,7 +25,7 @@ export function TodoItem({ todo, onComplete, onReopen, onDelete }: Props) {
   const creator = todo.creator_label ?? todo.creator_sub ?? "Unknown"
 
   return (
-    <li className="animate-pop-in flex items-start gap-3 rounded-xl border border-border bg-canvas-raised p-3.5 shadow-card">
+    <li className="animate-pop-in flex min-w-0 items-start gap-3 rounded-xl border border-border bg-canvas-raised p-3.5 shadow-card">
       <button
         type="button"
         onClick={() => (todo.done ? onReopen(todo.id) : onComplete(todo.id))}
@@ -41,7 +41,7 @@ export function TodoItem({ todo, onComplete, onReopen, onDelete }: Props) {
 
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
-          <p className={`text-sm ${todo.done ? "text-ink-muted line-through" : "text-ink"}`}>{todo.text}</p>
+          <p className={`min-w-0 break-words text-sm ${todo.done ? "text-ink-muted line-through" : "text-ink"}`}>{todo.text}</p>
           <div className="flex items-center gap-2">
             <CreatorBadge createdBy={todo.created_by} />
             <button

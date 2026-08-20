@@ -44,7 +44,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-6 sm:py-6">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-code-bg text-ink-muted">
@@ -67,7 +67,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                 className={`flex animate-pop-in flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
-                  className={`max-w-[75%] rounded-xl px-4 py-2.5 ${
+                  className={`max-w-[92%] break-words rounded-xl px-3 py-2.5 sm:max-w-[75%] sm:px-4 ${
                     message.role === "user"
                       ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
                       : "border border-border bg-canvas-raised text-ink shadow-card"
@@ -96,20 +96,20 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
         )}
         <div ref={bottomRef} />
       </div>
-      <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-3xl gap-2.5 border-t border-border p-4">
+      <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-3xl gap-2.5 border-t border-border p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder={canSend ? "Message the agent…" : (disabledReason ?? "Sign in to chat")}
           disabled={!canSend}
-          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none disabled:opacity-50"
+          className="min-w-0 min-h-11 flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={!canSend || !draft.trim()}
           aria-label="Send message"
           style={canSend && draft.trim() ? { backgroundImage: "var(--brand-gradient)" } : undefined}
-          className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-md bg-brand text-brand-ink shadow-card transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-brand text-brand-ink shadow-card transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
         >
           <SendIcon />
         </button>

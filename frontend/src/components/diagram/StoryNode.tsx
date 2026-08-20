@@ -48,7 +48,7 @@ export function StoryNode({ id, data, spans }: Props) {
 
   return (
     <div
-      className={`w-56 rounded-xl border bg-canvas-raised px-4 py-3.5 shadow-raised transition-all ${active ? "diagram-node-glow" : ""}`}
+      className={`w-[min(14rem,calc(100vw-2rem))] rounded-xl border bg-canvas-raised px-3 py-3 shadow-raised transition-all sm:w-56 sm:px-4 sm:py-3.5 ${active ? "diagram-node-glow" : ""}`}
       style={nodeStyle}
     >
       {handles.map((h) => (

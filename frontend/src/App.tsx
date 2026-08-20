@@ -92,21 +92,21 @@ export default function App() {
       : null
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas text-ink">
-      <header className="z-10 flex shrink-0 items-center justify-between border-b border-border bg-canvas-raised px-7 py-4 shadow-card">
-        <div>
-          <h1 className="text-[15px] font-semibold tracking-tight">Multi Agent Orchestration | Digital Assistant</h1>
-          <p className="text-xs text-ink-muted">LangChain · PingOne identity · OpenTelemetry</p>
+    <div className="flex h-[100dvh] min-h-[100dvh] min-w-0 flex-col overflow-hidden bg-canvas text-ink">
+      <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-canvas-raised px-3 py-3 shadow-card sm:flex-nowrap sm:px-5 sm:py-4 md:px-7">
+        <div className="min-w-0">
+          <h1 className="truncate text-xs font-semibold tracking-tight sm:text-[15px]">Multi Agent Orchestration | Digital Assistant</h1>
+          <p className="hidden text-xs text-ink-muted sm:block">LangChain · PingOne identity · OpenTelemetry</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <SignInButton me={me} />
           <div className="mx-1 h-6 w-px bg-border" aria-hidden="true" />
           <ThemeToggle />
         </div>
       </header>
 
-      <main className="flex min-h-0 flex-1">
-        <section className="min-h-0 flex-1">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
+        <section className="min-h-0 min-w-0 flex-1">
           <ChatPanel
             messages={messages}
             canSend={canSend}
@@ -116,7 +116,7 @@ export default function App() {
           />
         </section>
 
-        <aside className="flex min-h-0 w-[30rem] shrink-0 flex-col border-l border-border bg-canvas-raised">
+        <aside className="flex h-[min(42dvh,30rem)] min-h-0 w-full shrink-0 flex-col border-t border-border bg-canvas-raised xl:h-auto xl:w-[30rem] xl:border-t-0 xl:border-l">
           <div className="min-h-0 flex-[3]">
             <TelemetryPanel />
           </div>

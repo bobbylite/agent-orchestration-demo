@@ -50,14 +50,14 @@ export function AuthorizeDecisionsPanel({ onClose }: Props) {
   }, [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-6 backdrop-blur-sm">
-      <div className="flex h-full w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-canvas shadow-floating">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_srgb,var(--ink)_55%,transparent)] p-2 backdrop-blur-sm sm:p-6">
+      <div role="dialog" aria-modal="true" aria-labelledby="authorize-decisions-title" className="flex max-h-[calc(100dvh-1rem)] h-full w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-canvas shadow-floating sm:rounded-2xl">
         <div
-          className="flex shrink-0 items-center justify-between border-b border-border px-6 py-4"
+          className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-3 py-3 sm:flex-nowrap sm:px-6 sm:py-4"
           style={{ backgroundImage: "linear-gradient(120deg, color-mix(in srgb, var(--brand) 10%, transparent), transparent 60%)" }}
         >
           <div>
-            <h2 className="text-sm font-semibold tracking-tight text-ink">PingOne Authorize — decision history</h2>
+            <h2 id="authorize-decisions-title" className="text-sm font-semibold tracking-tight text-ink">PingOne Authorize — decision history</h2>
             <p className="text-xs text-ink-muted">
               Every decision-endpoint call task-agent has made — which policy, which agent, PERMIT or DENY, and why.
             </p>
@@ -82,14 +82,14 @@ export function AuthorizeDecisionsPanel({ onClose }: Props) {
               type="button"
               onClick={onClose}
               aria-label="Close authorize decisions"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
+              className="touch-target flex h-11 w-11 shrink-0 items-center justify-center sm:h-8 sm:w-8 rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink"
             >
               <CloseIcon />
             </button>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-6 sm:py-5">
           {entries.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
               <p className="text-sm text-ink-muted">No Authorize decisions recorded yet.</p>

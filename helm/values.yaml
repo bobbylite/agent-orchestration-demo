@@ -1,115 +1,161 @@
-# Container image registry shared by all services.
-# Build and push each service image with the matching name below, e.g.:
-#   docker build -t ghcr.io/bobbylite/agentorchestration-backend:latest -f backend/Dockerfile .
-#   docker push ghcr.io/bobbylite/agentorchestration-backend:latest
+# Safe example values for GitHub.
+# Replace CHANGE_ME values in a private deployment override, or use the
+# existingSecret references below. Do not put credentials in this file.
 image:
-  registry: ghcr.io/bobbylite
-  tag: latest
+  registry: docker.io/your-dockerhub-user
+  tag: v0.1.0
   pullPolicy: IfNotPresent
+  pullSecrets: []
 
-# Override the fully-qualified name prefix used for all Kubernetes resource names.
-# Useful to shorten the default "<release>-<chart>" prefix.
-# Example: fullnameOverride: "agentorchestration"
-fullnameOverride: ""
+fullnameOverride: agentorchestration
 
-# ---------------------------------------------------------------------------
-# Backend (Chat Agent — FastAPI + LangGraph)
-# ---------------------------------------------------------------------------
 backend:
   image: agentorchestration-backend
+  imageTag: v0.1.0
   replicaCount: 1
-
-  # Non-sensitive environment — safe to commit in values overrides.
   env:
-    APP_BASE_URL: "http://localhost"
-    FRONTEND_ORIGIN: "http://localhost"
-    OIDC_DISCOVERY_URL: ""
-    OIDC_CLIENT_ID: ""
+    APP_BASE_URL: "https://chat.example.com"
+    FRONTEND_ORIGIN: "https://chat.example.com"
+    OIDC_DISCOVERY_URL: "https://auth.pingone.com/CHANGE_ME/as/.well-known/openid-configuration"
+    OIDC_CLIENT_ID: "CHANGE_ME"
     OIDC_SCOPES: "openid profile email"
-    OIDC_POST_LOGOUT_REDIRECT_URI: "http://localhost"
-    AGENT_CLIENT_ID: ""
-    AGENT_SCOPES: ""
-    AGENT_EXPECTED_AUDIENCE: ""
-    TODOS_READ_SCOPE: "todos:read"
-    TODOS_WRITE_SCOPE: "todos:write"
+    OIDC_POST_LOGOUT_REDIRECT_URI: "https://chat.example.com"
+    AGENT_CLIENT_ID: "CHANGE_ME"
+    AGENT_OWN_SCOPE: "agent:orchestration"
+    AGENT_DELEGATION_CLIENT_ID: "CHANGE_ME"
+    AGENT_DELEGATION_SCOPE: "agent:delegation"
+    AGENT_EXPECTED_AUDIENCE: "http://localhost:9010"
+    TASK_AGENT_EXPECTED_AUDIENCE: "http://localhost:9010"
     AGENT_MODEL: "claude-sonnet-5"
-    # Resolved at render time to the task-agent's cluster-internal Service name.
-    TASK_AGENT_URL: ""  # defaults to http://<release>-task-agent:9010 if left blank
-
-  # Sensitive values — supply via --set or a sealed-secrets overlay; never commit.
+    MODEL_PROVIDER: "anthropic"
+    MODEL_ID: ""
+    GROQ_MODEL: "llama-3.3-70b-versatile"
+    LANGSMITH_TRACING: "false"
+    LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"
+    LANGSMITH_PROJECT: "Todos"
+    TASK_AGENT_URL: "http://agentorchestration-task-agent:9010"
   secrets:
+    # Create this Secret outside Helm with the keys expected by the backend.
+    existingSecret: agentorchestration-backend-secrets
+    create: false
     OIDC_CLIENT_SECRET: ""
     AGENT_CLIENT_SECRET: ""
+    AGENT_DELEGATION_CLIENT_SECRET: ""
     SESSION_SECRET: ""
     ANTHROPIC_API_KEY: ""
-
+    OPENAI_API_KEY: ""
+    GROQ_API_KEY: ""
+    LANGSMITH_API_KEY: ""
   service:
     port: 8000
-
   resources: {}
 
-# ---------------------------------------------------------------------------
-# Task Agent (specialist A2A server — FastAPI + LangGraph + a2a-sdk)
-# ---------------------------------------------------------------------------
 taskAgent:
   image: agentorchestration-task-agent
   replicaCount: 1
-
   env:
-    OIDC_DISCOVERY_URL: ""
-    AGENT_EXPECTED_AUDIENCE: ""
-    ALLOWED_AGENT_CLIENT_ID: ""
+    OIDC_DISCOVERY_URL: "https://auth.pingone.com/CHANGE_ME/as/.well-known/openid-configuration"
+    AGENT_EXPECTED_AUDIENCE: "http://localhost:9010"
+    EXPECTED_DELEGATION_SCOPE: "agent:delegation"
+    ALLOWED_AGENT_CLIENT_ID: "CHANGE_ME"
+    AGENT_TASK_SCOPE: "agent:task"
+    MCP_TODOS_AUDIENCE: "http://localhost:9000/mcp"
     TODOS_READ_SCOPE: "todos:read"
     TODOS_WRITE_SCOPE: "todos:write"
+    AUTHORIZE_DECISION_ENDPOINT: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
+    AUTHORIZE_SCOPE: "https://api.pingone.com/v1/environments/CHANGE_ME/decisionEndpoints/CHANGE_ME"
+    AUTHORIZE_CLIENT_AUTH_METHOD: "client_secret_post"
+    AUTHORIZE_DELEGATE_TASKS_POLICY_PARAMETER: "evaluateDelegateTasksPolicy"
+    AUTHORIZE_DELEGATE_TASKS_POLICY_VALUE: "true"
+    AUTHORIZE_TASK_POLICY_PARAMETER: "evaluateTaskPolicy"
+    AUTHORIZE_TASK_POLICY_VALUE: "true"
+    EVALUATOR_OPTIMIZER_POLICY_PARAMETER: "evaluateEvaluatorOptimizerPolicy"
     AGENT_MODEL: "claude-sonnet-5"
+    MODEL_PROVIDER: "anthropic"
+    MODEL_ID: ""
+    GROQ_MODEL: "llama-3.3-70b-versatile"
+    JUDGE_ENABLED: "true"
+    JUDGE_PROVIDER: "anthropic"
+    JUDGE_MODEL: ""
+    JUDGE_MAX_ATTEMPTS: "2"
+    LANGSMITH_TRACING: "false"
+    LANGSMITH_ENDPOINT: "https://api.smith.langchain.com"
+    LANGSMITH_PROJECT: "Todos"
+    MCP_TODOS_URL: "http://agentorchestration-mcp-todos-server:9000/mcp"
     HOST: "0.0.0.0"
     PORT: "9010"
-    # Resolved at render time to the cluster-internal Service name.
-    PUBLIC_URL: ""      # defaults to http://<release>-task-agent:9010 if left blank
-    MCP_TODOS_URL: ""   # defaults to http://<release>-mcp-todos-server:9000/mcp if left blank
-
+    PUBLIC_URL: "http://agentorchestration-task-agent:9010"
   secrets:
+    existingSecret: agentorchestration-task-agent-secrets
+    create: false
+    TASK_AGENT_CLIENT_ID: ""
+    TASK_AGENT_CLIENT_SECRET: ""
+    TODOS_MCP_CLIENT_ID: ""
+    TODOS_MCP_CLIENT_SECRET: ""
+    AUTHORIZE_CLIENT_ID: ""
+    AUTHORIZE_CLIENT_SECRET: ""
     ANTHROPIC_API_KEY: ""
-
+    OPENAI_API_KEY: ""
+    GROQ_API_KEY: ""
+    LANGSMITH_API_KEY: ""
   service:
     port: 9010
-
   resources: {}
 
-# ---------------------------------------------------------------------------
-# MCP Todos Server (trusted-internal fastmcp Streamable HTTP server)
-# ---------------------------------------------------------------------------
 mcpTodosServer:
-  image: agentorchestration-mcp-todos
+  image: agentorchestration-mcp-todos-server
   replicaCount: 1
-
+  env:
+    APP_BASE_URL: "https://todos.example.com"
+    FRONTEND_ORIGIN: "https://todos.example.com"
+    OIDC_DISCOVERY_URL: "https://auth.pingone.com/CHANGE_ME/as/.well-known/openid-configuration"
+    OIDC_CLIENT_ID: "CHANGE_ME"
+    OIDC_SCOPES: "openid profile email"
+    OIDC_POST_LOGOUT_REDIRECT_URI: "https://todos.example.com"
+    AGENT_EXPECTED_AUDIENCE: "http://localhost:9000/mcp"
+    ALLOWED_AGENT_CLIENT_ID: "CHANGE_ME"
+    TODOS_READ_SCOPE: "todos:read"
+    TODOS_WRITE_SCOPE: "todos:write"
+    AGENT_DISPLAY_NAME: "Task Agent"
+  secrets:
+    existingSecret: agentorchestration-mcp-todos-secrets
+    create: false
+    OIDC_CLIENT_SECRET: ""
+    SESSION_SECRET: ""
   service:
     port: 9000
-
   resources: {}
 
-# ---------------------------------------------------------------------------
-# Frontend (React + Vite → nginx)
-# ---------------------------------------------------------------------------
 frontend:
   image: agentorchestration-frontend
   replicaCount: 1
-
   service:
     type: ClusterIP
     port: 80
-
   resources: {}
 
-# ---------------------------------------------------------------------------
-# Ingress
-# ---------------------------------------------------------------------------
+todosUi:
+  image: agentorchestration-todos-ui
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  resources: {}
+
 ingress:
   enabled: false
-  className: ""
-  # annotations:
-  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
-  host: "agentorchestration.local"
-  tls:
-    enabled: false
-    secretName: ""
+  className: nginx-public
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+  console:
+    host: chat.example.com
+    tls:
+      enabled: true
+      secretName: chat-example-tls
+  todos:
+    host: todos.example.com
+    tls:
+      enabled: true
+      secretName: todos-example-tls

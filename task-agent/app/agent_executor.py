@@ -30,7 +30,10 @@ class TaskAgentExecutor(AgentExecutor):
         if context.current_task:
             task = context.current_task
         else:
-            task = new_task_from_user_message(context.message)
+            message = context.message
+            if message is None:
+                raise ValueError("Missing message in request.")
+            task = new_task_from_user_message(message)
             await event_queue.enqueue_event(task)
 
         task_updater = TaskUpdater(event_queue=event_queue, task_id=task.id, context_id=task.context_id)
@@ -114,13 +117,15 @@ class TaskAgentExecutor(AgentExecutor):
             # (see app/graph.py's _scoped_tool_call).
             actor_cache: dict[str, object] = {}
             judge_budget, judge_budget_reason = await policy.evaluate_judge_budget(
-                self.settings, subject_token=token,
-                client_id=identity.agent_client_id,
+                self.settings, subject_token=token, client_id=identity.agent_client_id
             )
             graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
             task_span.set_attribute("judge.max_attempts", judge_budget or self.settings.judge_max_attempts)
             if judge_budget_reason:
                 task_span.set_attribute("judge.budget_reason", judge_budget_reason)
+            if context.message is None:
+                await task_updater.failed(message=new_text_message("Missing message in request."))
+                return
             query = get_message_text(context.message)
             result = await graph.ainvoke(
                 {

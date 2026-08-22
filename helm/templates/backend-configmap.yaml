@@ -21,11 +21,14 @@ data:
   CIBA_AUTHORIZATION_AUTH_METHOD: {{ .Values.backend.env.CIBA_AUTHORIZATION_AUTH_METHOD | quote }}
   CIBA_TOKEN_AUTH_METHOD: {{ .Values.backend.env.CIBA_TOKEN_AUTH_METHOD | quote }}
   CIBA_SCOPE: {{ .Values.backend.env.CIBA_SCOPE | quote }}
-  CIBA_BINDING_MESSAGE: {{ .Values.backend.env.CIBA_BINDING_MESSAGE | quote }}
+  CIBA_BINDING_MESSAGE_LENGTH: {{ .Values.backend.env.CIBA_BINDING_MESSAGE_LENGTH | quote }}
   CIBA_REQUESTED_EXPIRY: {{ .Values.backend.env.CIBA_REQUESTED_EXPIRY | quote }}
+  CIBA_HTTP_TIMEOUT: {{ .Values.backend.env.CIBA_HTTP_TIMEOUT | quote }}
+  CIBA_TOKEN_MAX_AGE: {{ .Values.backend.env.CIBA_TOKEN_MAX_AGE | quote }}
   CIBA_POLL_TIMEOUT: {{ .Values.backend.env.CIBA_POLL_TIMEOUT | quote }}
   CIBA_MIN_POLL_INTERVAL: {{ .Values.backend.env.CIBA_MIN_POLL_INTERVAL | quote }}
   CIBA_MAX_POLL_INTERVAL: {{ .Values.backend.env.CIBA_MAX_POLL_INTERVAL | quote }}
+  CIBA_SLOW_DOWN_INCREMENT: {{ .Values.backend.env.CIBA_SLOW_DOWN_INCREMENT | quote }}
   AGENT_MODEL: {{ .Values.backend.env.AGENT_MODEL | quote }}
   MODEL_PROVIDER: {{ .Values.backend.env.MODEL_PROVIDER | quote }}
   MODEL_ID: {{ .Values.backend.env.MODEL_ID | quote }}

@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -59,6 +60,26 @@ class Settings(BaseSettings):
     def resolved_expected_audience(self) -> str | None:
         return self.agent_expected_audience or self.agent_client_id
 
+    # CIBA step-up approval. The dedicated client is separate from both
+    # agent/delegation workers. CIBA tokens are stored only in HttpOnly JWE
+    # cookies and are never accepted from the browser request body.
+    ciba_authorization_endpoint: str | None = Field(default=None)
+    ciba_token_endpoint: str | None = Field(default=None)
+    ciba_client_id: str | None = Field(default=None)
+    ciba_client_secret: str | None = Field(default=None)
+    ciba_client_auth_method: str = Field(default="client_secret_basic")
+    ciba_authorization_auth_method: str = Field(default="client_secret_basic")
+    ciba_token_auth_method: str = Field(default="client_secret_basic")
+    ciba_token_max_age: int = Field(default=3600)
+    ciba_scope: str = Field(default="openid ciba")
+    ciba_binding_message_length: int = Field(default=8)
+    ciba_requested_expiry: int = Field(default=300)
+    ciba_http_timeout: float = Field(default=10.0)
+    ciba_poll_timeout: float = Field(default=300.0)
+    ciba_min_poll_interval: float = Field(default=2.0)
+    ciba_max_poll_interval: float = Field(default=10.0)
+    ciba_slow_down_increment: float = Field(default=2.0)
+
     # Session cookie encryption (JWE, A256GCM needs a 32-byte key)
     session_secret: str | None = Field(default=None)
 
@@ -82,8 +103,20 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None)
     groq_model: str | None = Field(default=None)  # used when model_provider="groq"
 
-    # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent
+    # LangSmith tracing — purely additive to this service's own OpenTelemetry
+    # spans (see CLAUDE.md "OpenTelemetry is the product"), off by default.
+    # Read directly by langchain-core's own tracer via os.environ (see
+    # get_settings() below) — no LangSmith code is imported or called directly.
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="Todos")
+
+    # A2A: the Task Agent this Chat Agent may delegate to via ask_task_agent.
+    # This is the network URL used for the A2A call. It may differ from the
+    # PingOne audience carried by the delegation token in Kubernetes.
     task_agent_url: str = Field(default="http://localhost:9010")
+    task_agent_expected_audience: str | None = Field(default=None)
 
     # Networking
     app_base_url: str = Field(default="http://localhost:8000")
@@ -106,4 +139,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.langsmith_tracing:
+        os.environ.setdefault("LANGSMITH_TRACING", "true")
+        os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)
+        os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+        if settings.langsmith_api_key:
+            os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    return settings

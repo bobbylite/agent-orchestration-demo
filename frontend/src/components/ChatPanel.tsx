@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { InlineAgentApprovalPrompt } from "./InlineAgentApprovalPrompt"
 import { Markdown } from "./Markdown"
 import { TypingIndicator } from "./TypingIndicator"
 
@@ -7,13 +6,13 @@ export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string
-  /** True when the agent tried to act on the user's behalf without a
-   * delegation credential yet — renders an inline "Approve Agent Action"
-   * prompt. */
-  needsApproval?: boolean
   /** For assistant messages: the user text that produced this turn, so a
    * successful inline approval can automatically retry it. */
   sourceUserContent?: string
+  authorizationRequired?: boolean
+  authorizationEmail?: string
+  authorizationCode?: string
+  authorizationCapability?: "read" | "write" | "delete"
 }
 
 interface Props {
@@ -21,10 +20,9 @@ interface Props {
   canSend: boolean
   disabledReason: string | null
   onSend: (message: string) => void
-  onInlineApprove: (assistantMessageId: string, originalContent: string) => Promise<void>
 }
 
-export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineApprove }: Props) {
+export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) {
   const [draft, setDraft] = useState("")
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -44,7 +42,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-6 sm:py-6">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <div className="flex h-11 w-11 items-center justify-center rounded-full bg-code-bg text-ink-muted">
@@ -67,14 +65,20 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                 className={`flex animate-pop-in flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
-                  className={`max-w-[75%] rounded-xl px-4 py-2.5 ${
-                    message.role === "user"
-                      ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
-                      : "border border-border bg-canvas-raised text-ink shadow-card"
-                  }`}
+                  className={
+                    message.authorizationRequired
+                      ? "w-full max-w-[75%]"
+                      : `max-w-[92%] break-words rounded-xl px-3 py-2.5 sm:max-w-[75%] sm:px-4 ${
+                          message.role === "user"
+                            ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
+                            : "border border-border bg-canvas-raised text-ink shadow-card"
+                        }`
+                  }
                 >
                   {message.role === "assistant" ? (
-                    message.content ? (
+                    message.authorizationRequired ? (
+                      <AuthorizationCard email={message.authorizationEmail} bindingMessage={message.authorizationCode} capability={message.authorizationCapability} />
+                    ) : message.content ? (
                       <Markdown content={message.content} />
                     ) : (
                       <TypingIndicator />
@@ -83,33 +87,26 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                     message.content
                   )}
                 </div>
-                {message.needsApproval && (
-                  <div className="w-full max-w-[75%]">
-                    <InlineAgentApprovalPrompt
-                      onApprove={() => onInlineApprove(message.id, message.sourceUserContent ?? "")}
-                    />
-                  </div>
-                )}
               </div>
             ))}
           </div>
         )}
         <div ref={bottomRef} />
       </div>
-      <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-3xl gap-2.5 border-t border-border p-4">
+      <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-3xl gap-2.5 border-t border-border p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder={canSend ? "Message the agent…" : (disabledReason ?? "Sign in to chat")}
           disabled={!canSend}
-          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none disabled:opacity-50"
+          className="min-w-0 min-h-11 flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none disabled:opacity-50"
         />
         <button
           type="submit"
           disabled={!canSend || !draft.trim()}
           aria-label="Send message"
           style={canSend && draft.trim() ? { backgroundImage: "var(--brand-gradient)" } : undefined}
-          className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-md bg-brand text-brand-ink shadow-card transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-brand text-brand-ink shadow-card transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
         >
           <SendIcon />
         </button>
@@ -118,6 +115,32 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
         Agent Orchestration Console is intended for demonstration purposes only. Identity for AI and orchestration is powered by Langchain and PingOne.
       </p>
     </div>
+  )
+}
+
+function AuthorizationCard({ email, bindingMessage, capability }: { email?: string; bindingMessage?: string; capability?: "read" | "write" | "delete" }) {
+  return (
+    <div className="auth-card" role="status" aria-live="polite">
+      <div className="auth-card__orb" aria-hidden="true"><ShieldIcon /></div>
+      <div className="auth-card__body">
+        <p className="auth-card__eyebrow">Trust this agent to act on your behalf</p>
+        <p className="auth-card__title">Your authorization is needed{capability ? ` to ${capability} your todos` : ""}</p>
+        <p className="auth-card__copy">
+          An authorization request is waiting in the inbox for <strong>{email ?? "your account"}</strong>.
+          Follow the instructions in that email and confirm code <strong>{bindingMessage ?? "shown in the message"}</strong>. I&rsquo;ll continue automatically once approval is confirmed.
+        </p>
+        <div className="auth-card__status"><span className="auth-card__pulse" />Awaiting approval</div>
+      </div>
+    </div>
+  )
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3.2 19 6v5.2c0 4.4-2.8 7.9-7 9.6-4.2-1.7-7-5.2-7-9.6V6l7-2.8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="m9.2 12 1.8 1.8 3.9-4.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 

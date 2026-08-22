@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     allowed_agent_client_id: str | None = Field(default=None)
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+    todos_delete_scope: str = Field(default="todos:delete")
 
     # Friendly label for the audit log ("Agent Task Agent used ..." instead
     # of a raw client_id) — purely cosmetic, defaults to the client_id.
@@ -43,6 +44,13 @@ class Settings(BaseSettings):
     # Networking
     app_base_url: str = Field(default="http://localhost:9000")
     frontend_origin: str = Field(default="http://localhost:5174")
+
+    # PingOne Authorize PDP for the final MCP tool-call decision.
+    authorize_decision_endpoint: str | None = Field(default=None)
+    authorize_client_id: str | None = Field(default=None)
+    authorize_client_secret: str | None = Field(default=None)
+    authorize_scope: str | None = Field(default=None)
+    authorize_client_auth_method: str = Field(default="client_secret_post")
 
     @property
     def oidc_configured(self) -> bool:

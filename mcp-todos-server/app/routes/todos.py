@@ -65,6 +65,62 @@ async def add_todo_route(
     return todo
 
 
+@router.post("/{todo_id}/reopen")
+async def reopen_todo_route(
+    request: Request, todo_id: str, settings: Settings = Depends(get_settings)
+) -> dict:
+    session = _require_session(request, settings)
+    label = session.get("email") or session.get("name")
+    try:
+        todo = store.reopen_todo(todo_id)
+    except KeyError as exc:
+        audit.record(
+            actor_type="human",
+            tool="reopen_todo",
+            outcome="error",
+            on_behalf_of_sub=session.get("sub"),
+            on_behalf_of_label=label,
+            detail=str(exc),
+        )
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    audit.record(
+        actor_type="human",
+        tool="reopen_todo",
+        outcome="success",
+        on_behalf_of_sub=session.get("sub"),
+        on_behalf_of_label=label,
+    )
+    return todo
+
+
+@router.delete("/{todo_id}")
+async def delete_todo_route(
+    request: Request, todo_id: str, settings: Settings = Depends(get_settings)
+) -> dict:
+    session = _require_session(request, settings)
+    label = session.get("email") or session.get("name")
+    try:
+        todo = store.delete_todo(todo_id)
+    except KeyError as exc:
+        audit.record(
+            actor_type="human",
+            tool="delete_todo",
+            outcome="error",
+            on_behalf_of_sub=session.get("sub"),
+            on_behalf_of_label=label,
+            detail=str(exc),
+        )
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    audit.record(
+        actor_type="human",
+        tool="delete_todo",
+        outcome="success",
+        on_behalf_of_sub=session.get("sub"),
+        on_behalf_of_label=label,
+    )
+    return todo
+
+
 @router.post("/{todo_id}/complete")
 async def complete_todo_route(
     request: Request, todo_id: str, settings: Settings = Depends(get_settings)

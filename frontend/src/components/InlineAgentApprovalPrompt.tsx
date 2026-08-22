@@ -30,8 +30,7 @@ export function InlineAgentApprovalPrompt({ onApprove }: Props) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-xs text-ink">
-          The agent needs your approval to <strong>delegate this to the Task Agent</strong> — it doesn&rsquo;t have
-          that permission yet.
+          The agent needs your approval through PingOne <strong>CIBA</strong> before it can delegate this action.
         </p>
         {status === "error" && error && <p className="mt-1 text-xs text-danger">{error}</p>}
       </div>

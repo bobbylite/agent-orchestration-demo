@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     # granted scope on every MCP tool call.
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+    todos_delete_scope: str = Field(default="todos:delete")
 
     # PingOne Authorize decision endpoint. The worker app is used only to
     # authenticate the decision request; the delegated token is supplied to
@@ -74,6 +76,11 @@ class Settings(BaseSettings):
     authorize_delegate_tasks_policy_value: str = Field(default="true")
     authorize_task_policy_parameter: str = Field(default="evaluateTaskPolicy")
     authorize_task_policy_value: str = Field(default="true")
+    authorize_ciba_token_parameter: str = Field(default="cibaToken")
+    authorize_ciba_flow_parameter: str = Field(default="cibaFlow")
+    authorize_ciba_no_token_value: str = Field(default="false")
+    ciba_header_name: str = Field(default="X-CIBA-Token")
+    ciba_required_marker: str = Field(default="ciba_required")
 
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
@@ -125,6 +132,15 @@ class Settings(BaseSettings):
     # uses judge_model instead, with its own groq default — see above).
     groq_model: str | None = Field(default=None)
 
+    # LangSmith tracing — purely additive to this service's own OpenTelemetry
+    # spans (see CLAUDE.md "OpenTelemetry is the product"), off by default.
+    # Read directly by langchain-core's own tracer via os.environ (see
+    # get_settings() below) — no LangSmith code is imported or called directly.
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="Todos")
+
     mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
 
     host: str = Field(default="0.0.0.0")
@@ -134,4 +150,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.langsmith_tracing:
+        os.environ.setdefault("LANGSMITH_TRACING", "true")
+        os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)
+        os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+        if settings.langsmith_api_key:
+            os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    return settings

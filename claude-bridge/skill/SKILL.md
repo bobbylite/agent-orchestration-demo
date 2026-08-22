@@ -42,13 +42,12 @@ itself, in the same call.
 
 A todo has exactly: **text** and a **done**/not-done state (plus who
 created it and when, which you'd only see if asked). There is **no** due
-date, priority, tag, category, or list/project field, and there is
-**no** delete or archive operation — only add and complete. If the user
-asks for something that implies one of these (e.g. "add X due tomorrow",
-"show me high-priority todos", "delete X"), do the part that's supported
-(add the todo, list everything) and tell them plainly that the
-unsupported part (due dates, priorities, deletion) isn't something this
-list currently tracks — don't quietly drop it or pretend it worked.
+date, priority, tag, category, or list/project field. Delete is supported
+only when the user explicitly asks for it and the target is unambiguous.
+If the user asks for something that implies an unsupported field (e.g.
+"add X due tomorrow" or "show me high-priority todos"), do the supported
+part and explain the limitation plainly — don't quietly drop it or pretend
+it worked.
 
 ## Why this exists — worth narrating, briefly
 

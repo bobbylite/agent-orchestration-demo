@@ -24,8 +24,8 @@ from fastapi import FastAPI
 from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
-from app.telemetry import get_recent_spans, init_telemetry
-from app import token_ledger
+from app.telemetry import clear_recent_spans, get_recent_spans, init_telemetry
+from app import authorize_audit, token_ledger
 
 
 @asynccontextmanager
@@ -59,6 +59,11 @@ async def telemetry() -> dict:
     return {"spans": get_recent_spans()}
 
 
+@app.delete("/telemetry")
+async def clear_telemetry() -> dict:
+    return {"cleared": clear_recent_spans()}
+
+
 @app.get("/tokens/chain")
 async def tokens_chain() -> dict:
     """Backs the frontend's Token Chain inspector — this service's half of
@@ -67,6 +72,21 @@ async def tokens_chain() -> dict:
     of its own), so it's just token_ledger's snapshot, verbatim — null
     slots until a real delegated tool call has actually happened."""
     return token_ledger.snapshot()
+
+
+@app.get("/authorize/decisions")
+async def authorize_decisions() -> dict:
+    """Backs the frontend's Authorize Decisions panel — every PingOne
+    Authorize decision this service has requested (evaluator_optimizer,
+    task_policy, delegation_policy), newest first. See
+    app/authorize_audit.py; unlike token_ledger above, this is a genuine
+    append-only history, not a latest-value snapshot."""
+    return {"entries": authorize_audit.get_recent()}
+
+
+@app.delete("/authorize/decisions")
+async def clear_authorize_decisions() -> dict:
+    return {"cleared": authorize_audit.clear()}
 
 
 if __name__ == "__main__":

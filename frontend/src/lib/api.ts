@@ -37,6 +37,17 @@ export interface TaskAgentTokenChainResponse {
   task_agent_own: TokenLedgerEntry | null
   mcp_scoped_read: TokenLedgerEntry | null
   mcp_scoped_write: TokenLedgerEntry | null
+  mcp_scoped_delete: TokenLedgerEntry | null
+}
+
+export interface AuthorizeDecisionEntry {
+  id: string
+  timestamp: string
+  policy: "evaluator_optimizer" | "task_policy" | "delegation_policy"
+  tool: string | null
+  decision: "permit" | "deny" | "error"
+  agent_client_id: string | null
+  reason: string | null
 }
 
 export interface TelemetrySpan {
@@ -69,6 +80,7 @@ export const api = {
   getConfig: () => getJson<ConfigResponse>("/api/config"),
   getMe: () => getJson<MeResponse>("/api/auth/me"),
   getTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/api/telemetry"),
+  clearTelemetry: () => getJson<{ cleared: number }>("/api/telemetry", { method: "DELETE" }),
   /** task-agent's own spans (inbound_auth.verify, a2a.task_execute,
    * judge.evaluate — see task-agent/app/telemetry.py) — a separate process
    * from the Chat Agent backend, proxied via vite (see vite.config.ts)
@@ -76,6 +88,9 @@ export const api = {
    * running in every demo, so callers should treat a failure here as "no
    * data yet", not a hard error. */
   getTaskAgentTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/task-agent-api/telemetry"),
+  clearTaskAgentTelemetry: () => getJson<{ cleared: number }>("/task-agent-api/telemetry", { method: "DELETE" }),
+  getMcpTodosTelemetry: () => getJson<{ spans: TelemetrySpan[] }>("/mcp-todos-api/telemetry"),
+  clearMcpTodosTelemetry: () => getJson<{ cleared: number }>("/mcp-todos-api/telemetry", { method: "DELETE" }),
   /** This service's half of the real token chain — decoded (+ raw) claims
    * for the user's own token, the orchestration agent's own Client
    * Credentials token, and the delegation token their Token Exchange
@@ -89,11 +104,13 @@ export const api = {
    * real tool calls actually obtained. Same "reports reality, never
    * synthesizes" contract as getTokenChain above. */
   getTaskAgentTokenChain: () => getJson<TaskAgentTokenChainResponse>("/task-agent-api/tokens/chain"),
-  /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
-   * Token Exchange, scoped generically (not per todos:read/write action;
-   * the Task Agent decides that itself once it holds this credential). */
-  approveAgentAction: () =>
-    getJson<{ delegated: boolean }>("/api/auth/agent-token", { method: "POST" }),
+  /** Every PingOne Authorize decision task-agent has requested
+   * (evaluator_optimizer / task_policy / delegation_policy), newest
+   * first — a genuine history, unlike the token-chain snapshots above.
+   * See task-agent/app/authorize_audit.py. */
+  getAuthorizeDecisions: () => getJson<{ entries: AuthorizeDecisionEntry[] }>("/task-agent-api/authorize/decisions"),
+  clearAuthorizeDecisions: () =>
+    getJson<{ cleared: number }>("/task-agent-api/authorize/decisions", { method: "DELETE" }),
   loginUrl: "/api/auth/login",
   logoutUrl: "/api/auth/logout",
 }
@@ -102,11 +119,12 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
+  onAuthorizationRequired?: (payload: { email?: string; binding_message?: string; capability?: "read" | "write" | "delete" }) => void
   /** The agent tried to act on the user's behalf without a delegation
    * credential yet. Not an error — the turn continues normally and the
    * model explains it in its own words; this is the deterministic signal
    * for rendering an inline "Approve Agent Action" prompt. */
-  onAuthRequired?: () => void
+  onAuthRequired?: (payload: { mechanism?: string }) => void
   onRawEvent?: (event: string, data: string) => void
 }
 
@@ -159,7 +177,8 @@ export async function streamInvoke(
       if (eventName === "token") handlers.onToken(parsed.text)
       else if (eventName === "done") handlers.onDone()
       else if (eventName === "error") handlers.onError(parsed.message)
-      else if (eventName === "auth_required") handlers.onAuthRequired?.()
+      else if (eventName === "authorization_required") handlers.onAuthorizationRequired?.(parsed)
+      else if (eventName === "auth_required") handlers.onAuthRequired?.(parsed)
     }
   }
 }

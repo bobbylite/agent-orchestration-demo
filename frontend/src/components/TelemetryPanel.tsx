@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import { api, type TelemetrySpan } from "../lib/api"
 
 // Lazy-loaded: React Flow is real weight (~150kB gzipped) that plain chat
@@ -10,6 +10,9 @@ const ArchitectureDiagram = lazy(() =>
 const TokenChainPanel = lazy(() =>
   import("./TokenChainPanel").then((m) => ({ default: m.TokenChainPanel })),
 )
+const AuthorizeDecisionsPanel = lazy(() =>
+  import("./AuthorizeDecisionsPanel").then((m) => ({ default: m.AuthorizeDecisionsPanel })),
+)
 
 const POLL_INTERVAL_MS = 2000
 
@@ -20,19 +23,24 @@ export function TelemetryPanel() {
   const [spans, setSpans] = useState<TelemetrySpan[]>([])
   const [diagramOpen, setDiagramOpen] = useState(false)
   const [tokensOpen, setTokensOpen] = useState(false)
+  const [authorizeOpen, setAuthorizeOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const pollGeneration = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     async function poll() {
-      // Two independent processes (backend + task-agent), each best-effort:
-      // task-agent may not be running in every demo, so a failure fetching
-      // its spans shouldn't blank out the Chat Agent's. Merge by start_time
-      // rather than concatenating — polls land at different times and each
-      // endpoint's own ring buffer is only locally ordered.
-      const results = await Promise.allSettled([api.getTelemetry(), api.getTaskAgentTelemetry()])
+      const generation = pollGeneration.current
+      // Three independent processes (backend, task-agent, and MCP), each
+      // best-effort. A service being down should not blank out the others.
+      const results = await Promise.allSettled([
+        api.getTelemetry(),
+        api.getTaskAgentTelemetry(),
+        api.getMcpTodosTelemetry(),
+      ])
       const merged = results.flatMap((r) => (r.status === "fulfilled" ? r.value.spans : []))
       merged.sort((a, b) => a.start_time - b.start_time)
-      if (!cancelled) setSpans(merged)
+      if (!cancelled && generation === pollGeneration.current) setSpans(merged)
     }
     poll()
     const id = setInterval(poll, POLL_INTERVAL_MS)
@@ -44,12 +52,32 @@ export function TelemetryPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
-        <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">OpenTelemetry Spans</h2>
-        <div className="flex items-center gap-2">
+      <div className="flex shrink-0 flex-col gap-3 border-b border-border px-5 py-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">OpenTelemetry</h2>
           <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
             {spans.length}
           </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={clearing}
+            onClick={async () => {
+              pollGeneration.current += 1
+              setSpans([])
+              setClearing(true)
+              await Promise.allSettled([
+                api.clearTelemetry(),
+                api.clearTaskAgentTelemetry(),
+                api.clearMcpTodosTelemetry(),
+              ])
+              setClearing(false)
+            }}
+            className="rounded-md border border-border bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-ink-muted transition hover:bg-code-bg disabled:opacity-50"
+          >
+            {clearing ? "Clearing…" : "Clear"}
+          </button>
           <button
             type="button"
             onClick={() => setDiagramOpen(true)}
@@ -66,6 +94,14 @@ export function TelemetryPanel() {
             <TokensIcon />
             Tokens
           </button>
+          <button
+            type="button"
+            onClick={() => setAuthorizeOpen(true)}
+            className="flex items-center gap-1.5 rounded-md border border-brand/30 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-brand transition hover:bg-brand/10"
+          >
+            <AuthorizeIcon />
+            Decisions
+          </button>
         </div>
       </div>
 
@@ -77,6 +113,11 @@ export function TelemetryPanel() {
       {tokensOpen && (
         <Suspense fallback={<DiagramLoadingOverlay />}>
           <TokenChainPanel onClose={() => setTokensOpen(false)} />
+        </Suspense>
+      )}
+      {authorizeOpen && (
+        <Suspense fallback={<DiagramLoadingOverlay />}>
+          <AuthorizeDecisionsPanel onClose={() => setAuthorizeOpen(false)} />
         </Suspense>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -168,6 +209,20 @@ function DiagramIcon() {
       <rect x="10.5" y="2" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <rect x="5.75" y="9.5" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <path d="M3.25 6.5V8a1 1 0 0 0 1 1H8m4.75-2.5V8a1 1 0 0 1-1 1H8m0 0v.5" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
+
+function AuthorizeIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 1.5 13.5 3.5V7.5C13.5 11 11.2 13.3 8 14.5C4.8 13.3 2.5 11 2.5 7.5V3.5L8 1.5Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path d="M5.5 8 7.2 9.7 10.5 6.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

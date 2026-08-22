@@ -122,10 +122,12 @@ async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):
 
 
 # Tool name -> which Settings attribute names the scope to request for it.
-_REQUIRED_SCOPE_SETTING = {
-    "list_todos": "todos_read_scope",
-    "add_todo": "todos_write_scope",
-    "complete_todo": "todos_write_scope",
+_TOOL_CAPABILITY = {
+    "list_todos": ("read", "todos_read_scope"),
+    "add_todo": ("write", "todos_write_scope"),
+    "complete_todo": ("write", "todos_write_scope"),
+    "reopen_todo": ("write", "todos_write_scope"),
+    "delete_todo": ("delete", "todos_delete_scope"),
 }
 
 
@@ -165,13 +167,20 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     configurable = (request.runtime.config or {}).get("configurable", {})
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
+    ciba_tokens = configurable.get("ciba_tokens", {})
+    capability_entry = _TOOL_CAPABILITY.get(tool_name)
+    if not capability_entry or not delegation_token:
+        return ToolMessage(content=f"Cannot call '{tool_name}': unsupported tool or missing delegation.", tool_call_id=request.tool_call["id"])
+    capability, scope_setting = capability_entry
+    required_scope = getattr(settings, scope_setting)
+    ciba_token = ciba_tokens.get(capability) if isinstance(ciba_tokens, dict) else None
 
     allowed, reason, policy_context = await policy.check_with_authorize(
         settings,
         tool_name=tool_name,
         client_id=client_id,
         subject_token=delegation_token,
-        actor_cache=actor_cache,
+        ciba_token=ciba_token,
     )
     if not allowed:
         if reason == "agent_acl_denied":
@@ -180,15 +189,8 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
             message = policy_context or "Denied: the delegated user is not authorized for the todos group."
         else:
             message = "Denied: the todos authorization decision could not be established."
-        return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
-
-    scope_setting = _REQUIRED_SCOPE_SETTING.get(tool_name)
-    if not scope_setting or not delegation_token:
-        return ToolMessage(
-            content=f"Cannot call '{tool_name}': no delegation token available for this task.",
-            tool_call_id=request.tool_call["id"],
-        )
-    required_scope = getattr(settings, scope_setting)
+        marker = f"CIBA_REQUIRED:{capability}" if reason == "ciba_required" else ""
+        return ToolMessage(content=f"{marker}: {message}" if marker else message, tool_call_id=request.tool_call["id"])
 
     try:
         mcp_token = await _get_mcp_scoped_token(
@@ -196,7 +198,11 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         )
         if not isinstance(mcp_token, str) or not mcp_token:
             return ToolMessage(content="Denied: the todos task token was invalid.", tool_call_id=request.tool_call["id"])
-        ledger_slot = "mcp_scoped_read" if scope_setting == "todos_read_scope" else "mcp_scoped_write"
+        ledger_slot = {
+            "todos_read_scope": "mcp_scoped_read",
+            "todos_write_scope": "mcp_scoped_write",
+            "todos_delete_scope": "mcp_scoped_delete",
+        }[scope_setting]
         token_ledger.record(ledger_slot, mcp_token, tool=tool_name)
     except httpx.HTTPStatusError as exc:
         return ToolMessage(
@@ -212,11 +218,14 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         settings,
         tool_name=tool_name,
         exchanged_token=mcp_token,
-        actor_cache=actor_cache,
+        client_id=client_id,
+        ciba_token=ciba_token,
     )
     if not task_allowed:
         message = (
-            "Denied: the todos task policy did not permit this tool call."
+            f"CIBA_REQUIRED:{capability}: User approval is required before this task can continue."
+            if task_reason == "ciba_required"
+            else "Denied: the todos task policy did not permit this tool call."
             if task_reason == "task_policy_denied"
             else "Denied: the todos task policy decision could not be established."
         )
@@ -234,7 +243,7 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
 _SYSTEM = SystemMessage(
     content=(
         "You are the Task Agent, a specialist backend agent that manages a todo list via MCP "
-        "tools (list_todos, add_todo, complete_todo). Your final answer is consumed by another "
+        "tools (list_todos, add_todo, complete_todo, reopen_todo, delete_todo). Your final answer is consumed by another "
         "AI agent (the Chat Agent), not read directly by a human, so preserve structured details "
         "instead of writing a purely prose summary that drops them.\n\n"
         "Every todo has an `id`. Whenever you report todos — after list_todos, or after "
@@ -243,6 +252,14 @@ _SYSTEM = SystemMessage(
         "If you're asked to complete a todo by name or description rather than by id, don't "
         "refuse or ask for an id — call list_todos yourself first, match the todo by its text, "
         "then call complete_todo with the id you found, all within this same turn.\n\n"
+        "If you're asked to reopen, undo, or uncomplete a todo by name or description rather than "
+        "by id, call list_todos first, match the text case-insensitively, and then call reopen_todo "
+        "with the matching id. If there is no match, report that without mutating anything; if "
+        "there are multiple matches, ask for clarification. Report the todo id and done=false.\n\n"
+        "If you're asked to delete or remove a todo by name or description rather than by id, call "
+        "list_todos first, match the text case-insensitively, and then call delete_todo only for a "
+        "single unambiguous match. If there is no match, report that without mutating anything; if "
+        "there are multiple matches, ask for clarification. Report the deleted todo id and text.\n\n"
         "If a tool call is denied or fails, explain the real reason plainly and concisely."
     )
 )
@@ -457,6 +474,20 @@ def _judge_routing(state: AgentState) -> str:
     return "retry" if state.get("judge_status") == "fail" else "done"
 
 
+def _tool_routing(state: AgentState) -> str:
+    """Stop immediately after a deterministic CIBA denial.
+
+    The policy gate already ran in ``_scoped_tool_call``. When it returns the
+    reserved marker, there is no useful model work left: sending the denial
+    through ``task_assistant`` and then ``judge`` only adds latency and can
+    obscure the machine-readable signal with a paraphrase. Other tool results
+    follow the normal ReAct loop so the assistant can explain them naturally.
+    """
+    latest = state["messages"][-1] if state.get("messages") else None
+    content = _extract_text(getattr(latest, "content", ""))
+    return "done" if content.startswith("CIBA_REQUIRED") else "continue"
+
+
 async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_budget: int | None = None) -> CompiledStateGraph:
     tools = await _get_mcp_tools(settings)
 
@@ -472,9 +503,9 @@ async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_
         graph.add_node("judge", _build_judge_node(settings, judge_budget))
         graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: "judge"})
         graph.add_conditional_edges("judge", _judge_routing, {"retry": "task_assistant", "done": END})
-        graph.add_edge("execute_tool", "task_assistant")
+        graph.add_conditional_edges("execute_tool", _tool_routing, {"done": END, "continue": "task_assistant"})
         return graph.compile()
 
     graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: END})
-    graph.add_edge("execute_tool", "task_assistant")
+    graph.add_conditional_edges("execute_tool", _tool_routing, {"done": END, "continue": "task_assistant"})
     return graph.compile()

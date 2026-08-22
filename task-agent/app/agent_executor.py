@@ -8,6 +8,8 @@ CLAUDE.md's "core architectural decision" section.
 
 from __future__ import annotations
 
+import json
+
 from a2a.helpers import get_message_text, new_task_from_user_message, new_text_message, new_text_part
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -30,14 +32,30 @@ class TaskAgentExecutor(AgentExecutor):
         if context.current_task:
             task = context.current_task
         else:
-            task = new_task_from_user_message(context.message)
+            message = context.message
+            if message is None:
+                raise ValueError("Missing message in request.")
+            task = new_task_from_user_message(message)
             await event_queue.enqueue_event(task)
 
         task_updater = TaskUpdater(event_queue=event_queue, task_id=task.id, context_id=task.context_id)
 
         headers = context.call_context.state.get("headers", {})
-        auth_header = headers.get("authorization", "")
+        normalized_headers = {str(key).lower(): value for key, value in headers.items()}
+        auth_header = normalized_headers.get("authorization", "")
         token = auth_header.removeprefix("Bearer ").strip()
+        ciba_tokens: dict[str, str] = {}
+        raw_tokens = normalized_headers.get("x-ciba-tokens", "")
+        if raw_tokens:
+            try:
+                parsed = json.loads(raw_tokens)
+                if isinstance(parsed, dict):
+                    ciba_tokens = {str(k): str(v) for k, v in parsed.items() if isinstance(k, str) and isinstance(v, str) and v}
+            except (TypeError, ValueError):
+                ciba_tokens = {}
+        legacy = normalized_headers.get(self.settings.ciba_header_name.lower(), "").strip()
+        if legacy:
+            ciba_tokens["legacy"] = legacy
 
         if not token:
             await task_updater.failed(message=new_text_message("Missing bearer token."))
@@ -114,12 +132,15 @@ class TaskAgentExecutor(AgentExecutor):
             # (see app/graph.py's _scoped_tool_call).
             actor_cache: dict[str, object] = {}
             judge_budget, judge_budget_reason = await policy.evaluate_judge_budget(
-                self.settings, subject_token=token, actor_cache=actor_cache
+                self.settings, subject_token=token, client_id=identity.agent_client_id
             )
             graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
             task_span.set_attribute("judge.max_attempts", judge_budget or self.settings.judge_max_attempts)
             if judge_budget_reason:
                 task_span.set_attribute("judge.budget_reason", judge_budget_reason)
+            if context.message is None:
+                await task_updater.failed(message=new_text_message("Missing message in request."))
+                return
             query = get_message_text(context.message)
             result = await graph.ainvoke(
                 {
@@ -145,11 +166,28 @@ class TaskAgentExecutor(AgentExecutor):
                         "client_id": identity.agent_client_id,
                         "granted_scope": identity.scope,
                         "delegation_token": token,
+                        "ciba_tokens": ciba_tokens,
                         "thread_id": task.context_id,
                     }
                 },
             )
             answer = _extract_text(result["messages"][-1].content)
+            # Preserve the deterministic policy signal even if the assistant
+            # paraphrases the ToolMessage into ordinary prose. The backend
+            # uses this reserved prefix to emit the CIBA UI event; it is not
+            # user-controlled text and carries no credential or request id.
+            allowed_capabilities = {"read", "write", "delete"}
+            capabilities = sorted(
+                {
+                    capability
+                    for message in result["messages"]
+                    if hasattr(message, "content")
+                    for capability in allowed_capabilities
+                    if _extract_text(message.content).startswith(f"CIBA_REQUIRED:{capability}:")
+                }
+            )
+            if capabilities:
+                answer = "CIBA_REQUIRED:" + ",".join(capabilities)
             task_span.set_attribute("judge.final_status", result.get("judge_status") or "disabled")
             task_span.set_attribute("judge.attempts", result.get("judge_attempts", 0))
 

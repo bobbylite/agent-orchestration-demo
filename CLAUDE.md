@@ -605,6 +605,50 @@ in the Task Agent's graph" above) — those now key off the real
 `judge.evaluate` span instead of always rendering dashed/"not aggregated
 here."
 
+## LangSmith tracing (optional, additive to OpenTelemetry) (added 2026-08-18)
+
+Both `backend/` and `task-agent/` can optionally trace every LLM call their
+graph makes to LangSmith — this is **additive to, not a replacement for**,
+the OpenTelemetry story above. OTel's `RecordingSpanProcessor`/Telemetry
+panel exists for live security narration during a demo (auth/delegation
+spans); LangSmith gives LLM-call-level detail (prompts, token usage,
+latency, tool-call traces) that OTel's custom spans deliberately don't
+carry. Both run independently and neither depends on the other.
+
+**Purely `os.environ`-driven — no `langsmith` import anywhere in
+application code, no `graph.py` changes.** `langchain-core`'s global
+callback machinery reads `LANGSMITH_TRACING`/`LANGSMITH_ENDPOINT`/
+`LANGSMITH_API_KEY`/`LANGSMITH_PROJECT` from `os.environ` lazily, per
+`.ainvoke()` call — not at import time, unlike the
+`OTEL_INSTRUMENTATION_A2A_SDK_ENABLED` gotcha above. Both
+`backend/app/config.py` and `task-agent/app/config.py` gained four new
+`Settings` fields (`langsmith_tracing`, `langsmith_endpoint`,
+`langsmith_api_key`, `langsmith_project`) and `get_settings()` itself now
+does the `os.environ.setdefault(...)` propagation (guarded by
+`langsmith_tracing`) — deliberately placed there rather than in either
+`main.py`, since both `main.py` files already carry one real,
+import-order-sensitive `os.environ` gotcha and this isn't one; keeping it
+out of `main.py` avoids it being misread as another one.
+
+Both services share one LangSmith project (`"Todos"`, matching
+`LANGSMITH_PROJECT`) by convention — just matching env var values, no
+code-level coupling.
+
+**Known limitation: no cross-service trace correlation.** The Chat Agent →
+Task Agent hop is a real A2A HTTP/JSON-RPC call, not an in-process
+LangChain `Runnable` composition, so LangSmith trace context does not
+propagate across it. A single delegated request produces *two independent
+top-level traces* in the `"Todos"` project — one from `backend`'s
+`assistant` node, one from `task-agent`'s `task_assistant`/`judge` nodes —
+not one merged tree. Propagating a real trace/parent-run header through
+the A2A call (similar in spirit to how `agent_client_id` is threaded
+today) would fix this but wasn't asked for; treat it as a legitimate
+future enhancement, not a bug.
+
+Default off (`LANGSMITH_TRACING=false` in both `.env.example` files) — a
+deployment that never sets this needs zero changes and sees zero behavior
+difference.
+
 ## MCP server: its own UI, PingOne SSO, and an OBO audit log (2026-08-15)
 
 `mcp-todos-server/` stopped being a bare, unauthenticated `fastmcp`
@@ -747,6 +791,23 @@ has these settings at all).
 
 ## Known gotchas (all previously hit — don't re-debug these)
 
+- **`task-agent/app/policy.py`'s three PingOne Authorize calls used to
+  re-mint a fresh worker Client Credentials token every single task**
+  (via a task-scoped `actor_cache`), which was real, avoidable load on
+  PingOne and contributed to hitting a `REQUEST_LIMITED` rate limit under
+  rapid demo use — confirmed 2026-08-19. Fixed by moving the worker-token
+  cache to process scope (`policy.py`'s `_worker_cache` module dict,
+  `_get_worker_token()`, refreshed only within 30s of real expiry) since
+  the worker app's own identity doesn't vary per task, unlike the
+  Authorize *decision* itself, which is still requested fresh every call
+  (`_post_decision()`) — never cache the decision, only the credential
+  used to ask. `_post_decision()` also retries a `429` up to twice with
+  backoff (honoring `Retry-After` when PingOne sends one) before failing
+  closed, same as any other upstream failure. This dropped `actor_cache`
+  entirely from `evaluate_judge_budget`/`check_task_policy`/
+  `check_with_authorize`'s signatures — it's still used elsewhere in
+  `task-agent/app/graph.py` for the *separate* task-agent-own/MCP-scoped
+  token caching, untouched by this fix.
 - **`a2a-sdk` self-instruments onto any registered OTel `TracerProvider`**
   — `EventQueue`/request-handler/client-transport methods start emitting
   spans the moment `init_telemetry()` registers a real provider, flooding

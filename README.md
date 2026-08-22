@@ -146,7 +146,7 @@ answer questions about a todo list; everything else works without them)
 # terminal 3
 cd mcp-todos-server
 cp .env.example .env   # PingOne app #4 (its own UI) + own audience
-                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE
+                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE / TODOS_DELETE_SCOPE
 uv sync
 uv run uvicorn app.main:app --port 9000   # MCP endpoint at /mcp, its UI's API at /api/*
 
@@ -251,12 +251,12 @@ as #2, one hop later:
 as #3, one hop later:
 - Grant type: **Token Exchange**
 - Token endpoint auth method: `client_secret_basic`
-- Define `todos:read` and `todos:write` (or your own names — keep
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` matching) as scopes on a resource
+- Define `todos:read`, `todos:write`, and `todos:delete` (or your own names — keep
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` matching) as scopes on a resource
   whose **audience is the MCP server's own URL**
   (`http://localhost:9000/mcp`) and whose access token format is **JWT**
 - → `TODOS_MCP_CLIENT_ID`, `TODOS_MCP_CLIENT_SECRET`,
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` (`task-agent/.env`)
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` (`task-agent/.env`)
 
 All six are independent — you can enable just the sign-in app first, add
 the rest as you go; each pair only unlocks once both its apps are filled in.
@@ -290,7 +290,7 @@ propagates onto the token task-agent receives (see `CLAUDE.md`'s
 `ALLOWED_AGENT_CLIENT_ID` must be app #5's client_id
 (`TASK_AGENT_CLIENT_ID`), for the same reason, one hop later.
 `task-agent/.env` and `mcp-todos-server/.env`'s `TODOS_READ_SCOPE`/
-`TODOS_WRITE_SCOPE` must match each other exactly (`backend/.env` doesn't
+`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` must match each other exactly (`backend/.env` doesn't
 have these settings at all anymore).
 
 ## Claude Desktop as the orchestrator (optional)
@@ -358,9 +358,107 @@ second, independent origin (`http://localhost:8081`, service
 `mcp-todos-server-frontend`) — register *that* origin's
 `/api/auth/callback` with PingOne app #3, and set
 `MCP_TODOS_PUBLIC_ORIGIN=http://localhost:8081` (or your real domain).
+The Todos UI supports human add, complete, reopen, and delete operations;
+delete requires an explicit confirmation. The orchestration agent's
+`delete_todo` operation uses a separate `todos:delete` scope and must be
+permitted on the MCP resource and token-exchange client in PingOne.
 Keeping each frontend/backend pair behind its own single public origin
 means each session cookie stays host-scoped without any cross-site cookie
 configuration.
+
+## Kubernetes deployment with Docker Hub
+
+The Helm chart in `helm/` deploys five workloads into an existing namespace: the chat frontend, backend/chat agent, task agent, MCP Todos server, and Todos UI. It does not deploy `claude-bridge`, create a namespace, or manage an existing Ping Identity Helm release.
+
+Set your values:
+
+```bash
+export DOCKERHUB_USER=your-dockerhub-user
+export TAG=v1
+export NAMESPACE=your-existing-namespace
+export RELEASE=agentorchestration
+```
+
+Build and push the Python images from the repository root because they copy `shared/`:
+
+```bash
+docker buildx build --platform linux/amd64 -f backend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-backend:$TAG . --push
+docker buildx build --platform linux/amd64 -f task-agent/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-task-agent:$TAG . --push
+docker buildx build --platform linux/amd64 -f mcp-todos-server/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-mcp-todos-server:$TAG . --push
+```
+
+Build and push the frontend images using their own directories as build contexts:
+
+```bash
+docker buildx build --platform linux/amd64 -f frontend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-frontend:$TAG frontend --push
+docker buildx build --platform linux/amd64 -f mcp-todos-server/frontend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-todos-ui:$TAG mcp-todos-server/frontend --push
+```
+
+Create an uncommitted values override with your Docker Hub user, tag, two public HTTPS hosts, and Ingress class. The chart defaults include the current five image names and internal Service URL fallbacks. Use separate browser origins such as `https://chat.example.com` and `https://todos.example.com`; register these exact PingOne callbacks:
+
+```text
+https://chat.example.com/api/auth/callback
+https://todos.example.com/api/auth/callback
+```
+
+For production, pre-create or externally manage the backend, task-agent, and MCP server Secrets, then set their `*.secrets.existingSecret` values. Do not commit credentials. OAuth audience values must match the PingOne resources actually configured in your tenant; Kubernetes Service DNS is used for internal HTTP URLs, not automatically as a replacement for PingOne audiences.
+
+Validate and install into the existing namespace:
+
+```bash
+helm lint ./helm -f values-pingidentity.yaml
+helm template $RELEASE ./helm -n $NAMESPACE -f values-pingidentity.yaml > /tmp/agentorchestration.yaml
+kubectl apply --namespace $NAMESPACE --dry-run=server -f /tmp/agentorchestration.yaml
+helm upgrade --install $RELEASE ./helm --namespace $NAMESPACE -f values-pingidentity.yaml --wait --timeout 10m
+```
+
+Check all five workloads:
+
+```bash
+kubectl get deployments,services,pods,ingress -n $NAMESPACE -l app.kubernetes.io/instance=$RELEASE
+kubectl rollout status deployment/$RELEASE-backend -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-task-agent -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-mcp-todos-server -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-frontend -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-todos-ui -n $NAMESPACE
+```
+
+Smoke-test both public hosts and the task-agent proxy:
+
+```bash
+curl -i https://chat.example.com/api/health
+curl -i https://chat.example.com/task-agent-api/telemetry
+curl -i https://todos.example.com/api/health
+```
+
+Keep replicas at one initially because todos, telemetry, audit entries, and token ledgers are in memory.
+
+## Deployed demo URLs
+
+The current Kubernetes deployment exposes two browser origins. MCP telemetry is also merged into the chat console's OpenTelemetry panel through the `/mcp-todos-api/telemetry` proxy:
+
+
+- Chat console: https://rluisi-agent-orchestration-client.ping-devops.com
+- Todos UI: https://rluisi-agent-orchestration-todos.ping-devops.com
+
+Useful smoke-test endpoints:
+
+- Chat health: https://rluisi-agent-orchestration-client.ping-devops.com/api/health
+- Task Agent telemetry proxy: https://rluisi-agent-orchestration-client.ping-devops.com/task-agent-api/telemetry
+- Todos health: https://rluisi-agent-orchestration-todos.ping-devops.com/api/health
+
+These URLs are deployment-specific and require the corresponding PingOne configuration for login. Public browser URLs are different from internal Kubernetes URLs: the backend reaches `agentorchestration-task-agent:9010`, and the Task Agent reaches `agentorchestration-mcp-todos-server:9000/mcp`.
+
+## Release and Git tagging
+
+Use one immutable version tag for all five images and the Helm release; do not use `latest`. Keep per-image overrides such as `backend.imageTag` aligned with the global `image.tag`. After the commit and images are finalized, an annotated Git tag can be created and pushed:
+
+```bash
+git tag -a v1.0.0 -m "release v1.0.0"
+git push origin v1.0.0
+```
+
+Do not commit generated deployment values or credentials. Use `existingSecret`/external secret management for production; any credential-looking values currently present in deployment overrides should be rotated and removed separately.
 
 ## How the pieces fit together
 

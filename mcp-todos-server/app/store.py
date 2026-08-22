@@ -72,3 +72,18 @@ def complete_todo(todo_id: str) -> dict:
         raise KeyError(f"No todo with id {todo_id!r}")
     todo["done"] = True
     return todo
+
+
+def reopen_todo(todo_id: str) -> dict:
+    todo = _todos.get(todo_id)
+    if not todo:
+        raise KeyError(f"No todo with id {todo_id!r}")
+    todo["done"] = False
+    return todo
+
+
+def delete_todo(todo_id: str) -> dict:
+    try:
+        return _todos.pop(todo_id)
+    except KeyError as exc:
+        raise KeyError(f"No todo with id {todo_id!r}") from exc

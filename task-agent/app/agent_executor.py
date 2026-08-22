@@ -41,6 +41,8 @@ class TaskAgentExecutor(AgentExecutor):
         headers = context.call_context.state.get("headers", {})
         auth_header = headers.get("authorization", "")
         token = auth_header.removeprefix("Bearer ").strip()
+        normalized_headers = {str(key).lower(): value for key, value in headers.items()}
+        ciba_token = normalized_headers.get(self.settings.ciba_header_name.lower(), "").strip()
 
         if not token:
             await task_updater.failed(message=new_text_message("Missing bearer token."))
@@ -151,11 +153,22 @@ class TaskAgentExecutor(AgentExecutor):
                         "client_id": identity.agent_client_id,
                         "granted_scope": identity.scope,
                         "delegation_token": token,
+                        "ciba_token": ciba_token,
                         "thread_id": task.context_id,
                     }
                 },
             )
             answer = _extract_text(result["messages"][-1].content)
+            # Preserve the deterministic policy signal even if the assistant
+            # paraphrases the ToolMessage into ordinary prose. The backend
+            # uses this reserved prefix to emit the CIBA UI event; it is not
+            # user-controlled text and carries no credential or request id.
+            if any(
+                _extract_text(message.content).startswith("CIBA_REQUIRED")
+                for message in result["messages"]
+                if hasattr(message, "content")
+            ):
+                answer = f"CIBA_REQUIRED: {answer}"
             task_span.set_attribute("judge.final_status", result.get("judge_status") or "disabled")
             task_span.set_attribute("judge.attempts", result.get("judge_attempts", 0))
 

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent } from "react"
-import { InlineAgentApprovalPrompt } from "./InlineAgentApprovalPrompt"
 import { Markdown } from "./Markdown"
 import { TypingIndicator } from "./TypingIndicator"
 
@@ -7,13 +6,10 @@ export interface ChatMessage {
   id: string
   role: "user" | "assistant"
   content: string
-  /** True when the agent tried to act on the user's behalf without a
-   * delegation credential yet — renders an inline "Approve Agent Action"
-   * prompt. */
-  needsApproval?: boolean
   /** For assistant messages: the user text that produced this turn, so a
    * successful inline approval can automatically retry it. */
   sourceUserContent?: string
+  authorizationRequired?: boolean
 }
 
 interface Props {
@@ -21,10 +17,9 @@ interface Props {
   canSend: boolean
   disabledReason: string | null
   onSend: (message: string) => void
-  onInlineApprove: (assistantMessageId: string, originalContent: string) => Promise<void>
 }
 
-export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineApprove }: Props) {
+export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) {
   const [draft, setDraft] = useState("")
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -67,14 +62,20 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                 className={`flex animate-pop-in flex-col ${message.role === "user" ? "items-end" : "items-start"}`}
               >
                 <div
-                  className={`max-w-[92%] break-words rounded-xl px-3 py-2.5 sm:max-w-[75%] sm:px-4 ${
-                    message.role === "user"
-                      ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
-                      : "border border-border bg-canvas-raised text-ink shadow-card"
-                  }`}
+                  className={
+                    message.authorizationRequired
+                      ? "w-full max-w-[75%]"
+                      : `max-w-[92%] break-words rounded-xl px-3 py-2.5 sm:max-w-[75%] sm:px-4 ${
+                          message.role === "user"
+                            ? "whitespace-pre-wrap bg-brand text-sm font-medium leading-relaxed text-[#ffe5e0] shadow-card"
+                            : "border border-border bg-canvas-raised text-ink shadow-card"
+                        }`
+                  }
                 >
                   {message.role === "assistant" ? (
-                    message.content ? (
+                    message.authorizationRequired ? (
+                      <AuthorizationCard />
+                    ) : message.content ? (
                       <Markdown content={message.content} />
                     ) : (
                       <TypingIndicator />
@@ -83,13 +84,6 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
                     message.content
                   )}
                 </div>
-                {message.needsApproval && (
-                  <div className="w-full max-w-[75%]">
-                    <InlineAgentApprovalPrompt
-                      onApprove={() => onInlineApprove(message.id, message.sourceUserContent ?? "")}
-                    />
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -118,6 +112,32 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend, onInlineA
         Agent Orchestration Console is intended for demonstration purposes only. Identity for AI and orchestration is powered by Langchain and PingOne.
       </p>
     </div>
+  )
+}
+
+function AuthorizationCard() {
+  return (
+    <div className="auth-card" role="status" aria-live="polite">
+      <div className="auth-card__orb" aria-hidden="true"><ShieldIcon /></div>
+      <div className="auth-card__body">
+        <p className="auth-card__eyebrow">SECURE CHECKPOINT</p>
+        <p className="auth-card__title">Your authorization is needed</p>
+        <p className="auth-card__copy">
+          An authorization request is waiting in the inbox for <strong>example@server.com</strong>.
+          Follow the instructions in that email. I&rsquo;ll continue automatically once approval is confirmed.
+        </p>
+        <div className="auth-card__status"><span className="auth-card__pulse" />Awaiting secure approval</div>
+      </div>
+    </div>
+  )
+}
+
+function ShieldIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 3.2 19 6v5.2c0 4.4-2.8 7.9-7 9.6-4.2-1.7-7-5.2-7-9.6V6l7-2.8Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="m9.2 12 1.8 1.8 3.9-4.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   )
 }
 

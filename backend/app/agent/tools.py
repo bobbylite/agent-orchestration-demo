@@ -30,6 +30,7 @@ from app.telemetry import with_span
 # model still sees the full sentence and explains it to the user in its own
 # words; the marker is just for the frontend's benefit.
 NEEDS_AGENT_AUTH_MARKER = "NEEDS_AGENT_AUTH"
+CIBA_REQUIRED_MARKER = "CIBA_REQUIRED"
 
 _STATE_LABELS = {
     TaskState.TASK_STATE_COMPLETED: "completed",
@@ -84,6 +85,9 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
             )
 
         headers = {"Authorization": f"Bearer {delegated_token}"}
+        ciba_token = configurable.get("ciba_token")
+        if ciba_token:
+            headers["X-CIBA-Token"] = ciba_token
         async with httpx.AsyncClient(headers=headers, timeout=30) as httpx_client:
             resolver = A2ACardResolver(httpx_client=httpx_client, base_url=task_agent_url)
             card = await resolver.get_agent_card()
@@ -117,6 +121,8 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
             await client.close()
 
         span.set_attribute("a2a.result", "ok" if answer else "empty")
+        if answer and CIBA_REQUIRED_MARKER in answer:
+            return CIBA_REQUIRED_MARKER
         return answer or "The Task Agent did not return a response."
 
 

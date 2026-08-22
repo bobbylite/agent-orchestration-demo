@@ -36,20 +36,34 @@ export default function App() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
   }
 
-  // Shared by the initial send and the inline-approval retry — both are
-  // "run this user text through the graph and stream into this assistant
-  // message", just with different setup around them.
   async function runTurn(content: string, assistantMessageId: string) {
     setSending(true)
     try {
       await streamInvoke(threadId.current, content, {
         onToken: (text) => {
           setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMessageId ? { ...m, content: m.content + text } : m)),
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? { ...m, content: m.content + text, authorizationRequired: false }
+                : m,
+            ),
           )
         },
-        onAuthRequired: () => updateMessage(assistantMessageId, { needsApproval: true }),
         onDone: () => setSending(false),
+        onAuthorizationRequired: () => {
+          setSending(false)
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMessageId
+                ? {
+                    ...m,
+                    content: "",
+                    authorizationRequired: true,
+                  }
+                : m,
+            ),
+          )
+        },
         onError: (message) => {
           updateMessage(assistantMessageId, { content: `⚠ ${message}` })
           setSending(false)
@@ -70,20 +84,6 @@ export default function App() {
     await runTurn(content, assistantMessage.id)
   }
 
-  // Approve inline (Client Credentials + RFC 8693 Token Exchange), then
-  // automatically retry the same request — "ask → approve → try again" as
-  // one flow, not a second manual step.
-  async function handleInlineApprove(assistantMessageId: string, originalContent: string) {
-    await api.approveAgentAction()
-    await refreshMe()
-    updateMessage(assistantMessageId, { needsApproval: false, content: "" })
-    await runTurn(originalContent, assistantMessageId)
-  }
-
-  // Plain chat only needs a signed-in session — see backend/app/routes/invoke.py.
-  // Delegating to the Task Agent (todos, etc.) needs a per-action delegated
-  // token too, but that's surfaced inline in the chat when it's actually
-  // needed, scoped to exactly that action — not gated here.
   const canSend = Boolean(me?.signed_in) && !sending
   const disabledReason = !me?.oidc_enabled
     ? null
@@ -107,13 +107,7 @@ export default function App() {
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col xl:flex-row">
         <section className="min-h-0 min-w-0 flex-1">
-          <ChatPanel
-            messages={messages}
-            canSend={canSend}
-            disabledReason={disabledReason}
-            onSend={handleSend}
-            onInlineApprove={handleInlineApprove}
-          />
+          <ChatPanel messages={messages} canSend={canSend} disabledReason={disabledReason} onSend={handleSend} />
         </section>
 
         <aside className="flex h-[min(42dvh,30rem)] min-h-0 w-full shrink-0 flex-col border-t border-border bg-canvas-raised xl:h-auto xl:w-[30rem] xl:border-t-0 xl:border-l">

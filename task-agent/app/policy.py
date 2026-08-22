@@ -159,6 +159,7 @@ async def check_task_policy(
     *,
     tool_name: str,
     exchanged_token: str | None,
+    ciba_token: str | None = None,
     client_id: str | None = None,
 ) -> tuple[bool, str]:
     """Authorize the freshly exchanged MCP token before calling MCP."""
@@ -172,7 +173,9 @@ async def check_task_policy(
                 worker_token,
                 {
                     settings.authorize_task_policy_parameter: settings.authorize_task_policy_value,
-                    "AccessToken": exchanged_token,
+                    "AccessToken": exchanged_token or "",
+                    settings.authorize_ciba_token_parameter: ciba_token or settings.authorize_ciba_no_token_value,
+                    settings.authorize_ciba_flow_parameter: "true" if ciba_token else "false",
                 },
             )
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
@@ -185,11 +188,21 @@ async def check_task_policy(
             return False, "task_policy_request_failed"
         if not isinstance(body, dict) or body.get("decision") != "PERMIT":
             span.set_attribute("policy.result", str(body.get("decision", "invalid")).lower() if isinstance(body, dict) else "invalid")
+            marker = settings.ciba_required_marker
+            statements = body.get("statements", []) if isinstance(body, dict) else []
+            ciba_required = body.get("code") == marker or body.get("user_code") == marker
+            if isinstance(statements, list):
+                ciba_required = ciba_required or any(
+                    isinstance(statement, dict)
+                    and (statement.get("code") == marker or statement.get("payload") == marker)
+                    for statement in statements
+                )
+            reason = "ciba_required" if ciba_required else "task_policy_denied"
             authorize_audit.record(
                 policy="task_policy", decision="deny", tool=tool_name,
-                agent_client_id=client_id, reason="task_policy_denied",
+                agent_client_id=client_id, reason=reason,
             )
-            return False, "task_policy_denied"
+            return False, reason
         span.set_attribute("policy.result", "permit")
         authorize_audit.record(policy="task_policy", decision="permit", tool=tool_name, agent_client_id=client_id)
         return True, "permit"
@@ -201,6 +214,7 @@ async def check_with_authorize(
     tool_name: str,
     client_id: str | None,
     subject_token: str | None,
+    ciba_token: str | None = None,
 ) -> tuple[bool, str, str | None]:
     """Run the local ACL and then ask PingOne Authorize about group access.
 
@@ -230,7 +244,7 @@ async def check_with_authorize(
                 worker_token,
                 {
                     settings.authorize_delegate_tasks_policy_parameter: settings.authorize_delegate_tasks_policy_value,
-                    "AccessToken": subject_token,
+                    "AccessToken": subject_token or "",
                 },
             )
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:

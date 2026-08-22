@@ -60,6 +60,26 @@ class Settings(BaseSettings):
     def resolved_expected_audience(self) -> str | None:
         return self.agent_expected_audience or self.agent_client_id
 
+    # CIBA step-up approval. The dedicated client is separate from both
+    # agent/delegation workers. CIBA tokens are stored only in HttpOnly JWE
+    # cookies and are never accepted from the browser request body.
+    ciba_authorization_endpoint: str | None = Field(default=None)
+    ciba_token_endpoint: str | None = Field(default=None)
+    ciba_client_id: str | None = Field(default=None)
+    ciba_client_secret: str | None = Field(default=None)
+    ciba_client_auth_method: str = Field(default="client_secret_basic")
+    ciba_authorization_auth_method: str = Field(default="client_secret_basic")
+    ciba_token_auth_method: str = Field(default="client_secret_basic")
+    ciba_token_max_age: int = Field(default=3600)
+    ciba_scope: str = Field(default="openid ciba")
+    ciba_binding_message: str = Field(default="DEL12345")
+    ciba_requested_expiry: int = Field(default=300)
+    ciba_http_timeout: float = Field(default=10.0)
+    ciba_poll_timeout: float = Field(default=300.0)
+    ciba_min_poll_interval: float = Field(default=2.0)
+    ciba_max_poll_interval: float = Field(default=10.0)
+    ciba_slow_down_increment: float = Field(default=2.0)
+
     # Session cookie encryption (JWE, A256GCM needs a 32-byte key)
     session_secret: str | None = Field(default=None)
 

@@ -16,6 +16,16 @@ data:
   AGENT_DELEGATION_CLIENT_ID: {{ .Values.backend.env.AGENT_DELEGATION_CLIENT_ID | quote }}
   AGENT_DELEGATION_SCOPE: {{ .Values.backend.env.AGENT_DELEGATION_SCOPE | quote }}
   AGENT_EXPECTED_AUDIENCE: {{ .Values.backend.env.AGENT_EXPECTED_AUDIENCE | quote }}
+  CIBA_AUTHORIZATION_ENDPOINT: {{ .Values.backend.env.CIBA_AUTHORIZATION_ENDPOINT | quote }}
+  CIBA_TOKEN_ENDPOINT: {{ .Values.backend.env.CIBA_TOKEN_ENDPOINT | quote }}
+  CIBA_AUTHORIZATION_AUTH_METHOD: {{ .Values.backend.env.CIBA_AUTHORIZATION_AUTH_METHOD | quote }}
+  CIBA_TOKEN_AUTH_METHOD: {{ .Values.backend.env.CIBA_TOKEN_AUTH_METHOD | quote }}
+  CIBA_SCOPE: {{ .Values.backend.env.CIBA_SCOPE | quote }}
+  CIBA_BINDING_MESSAGE: {{ .Values.backend.env.CIBA_BINDING_MESSAGE | quote }}
+  CIBA_REQUESTED_EXPIRY: {{ .Values.backend.env.CIBA_REQUESTED_EXPIRY | quote }}
+  CIBA_POLL_TIMEOUT: {{ .Values.backend.env.CIBA_POLL_TIMEOUT | quote }}
+  CIBA_MIN_POLL_INTERVAL: {{ .Values.backend.env.CIBA_MIN_POLL_INTERVAL | quote }}
+  CIBA_MAX_POLL_INTERVAL: {{ .Values.backend.env.CIBA_MAX_POLL_INTERVAL | quote }}
   AGENT_MODEL: {{ .Values.backend.env.AGENT_MODEL | quote }}
   MODEL_PROVIDER: {{ .Values.backend.env.MODEL_PROVIDER | quote }}
   MODEL_ID: {{ .Values.backend.env.MODEL_ID | quote }}

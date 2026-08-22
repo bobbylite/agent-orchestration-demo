@@ -19,10 +19,6 @@
   --shadow-floating: 0 12px 32px rgba(5, 23, 39, 0.12), 0 2px 6px rgba(5, 23, 39, 0.06);
 }
 
-/* Guarded with :not([data-theme="light"]) so an explicit light-mode toggle
-   can override a dark system preference — without this guard, this block's
-   plain :root selector ties with the base :root above and (being declared
-   later) always wins regardless of data-theme. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --canvas: #051727;
@@ -83,265 +79,53 @@
   --font-mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-}
-
-body {
-  margin: 0;
-  overscroll-behavior: none;
-  background-color: var(--canvas);
-  color: var(--ink);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-.touch-target {
-  min-width: 44px;
-  min-height: 44px;
-}
+html, body, #root { height: 100%; }
+body { margin: 0; overscroll-behavior: none; background-color: var(--canvas); color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+* { box-sizing: border-box; }
+.touch-target { min-width: 44px; min-height: 44px; }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-  }
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
 }
 
-/* One consistent, branded focus ring everywhere, rather than each
-   interactive element defining (or forgetting to define) its own. */
-:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 2px; }
 
-@keyframes pop-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
+@keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.animate-pop-in { animation: pop-in 0.22s ease-out both; }
+@keyframes typing-bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
 
-.animate-pop-in {
-  animation: pop-in 0.22s ease-out both;
-}
-
-@keyframes typing-bounce {
-  0%,
-  80%,
-  100% {
-    transform: translateY(0);
-    opacity: 0.4;
-  }
-  40% {
-    transform: translateY(-4px);
-    opacity: 1;
-  }
-}
-
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-::-webkit-scrollbar-thumb {
-  background-color: var(--border);
-  border-radius: 999px;
-}
-
-/* Architecture diagram (components/diagram/) — retheme React Flow's own
-   CSS-variable system (v12) onto our tokens instead of its default light
-   palette, so it follows light/dark automatically like everything else. */
-.react-flow {
-  --xy-background-color: var(--canvas);
-  --xy-background-pattern-dots-color-default: var(--border);
-  --xy-edge-stroke-default: var(--border);
-  --xy-edge-label-background-color-default: var(--canvas);
-  --xy-edge-label-color-default: var(--ink-muted);
-  --xy-controls-button-background-color: var(--canvas-raised);
-  --xy-controls-button-background-color-hover: var(--code-bg);
-  --xy-controls-button-color: var(--ink-muted);
-  --xy-controls-button-color-hover: var(--ink);
-  --xy-controls-button-border-color: var(--border);
-  --xy-controls-box-shadow: var(--shadow-raised);
-  --xy-minimap-background-color-default: var(--canvas-raised);
-}
-
-.react-flow__controls {
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: var(--shadow-raised);
-}
-
-.react-flow__controls-button {
-  border-bottom-color: var(--border) !important;
-}
-
-@keyframes diagram-flow {
-  to {
-    stroke-dashoffset: -20;
-  }
-}
-
-.diagram-edge-flow {
-  animation: diagram-flow 0.6s linear infinite;
-}
-
-/* Breathing glow for an edge/node that just carried a real span — the
-   "marching ants" dash (diagram-edge-flow, above) reads as motion along
-   the line; this reads as the line itself lighting up. Both run together
-   on an active edge. */
-@keyframes diagram-glow-pulse {
-  0%,
-  100% {
-    filter: drop-shadow(0 0 3px color-mix(in srgb, var(--brand) 65%, transparent))
-      drop-shadow(0 0 1px color-mix(in srgb, var(--brand) 90%, transparent));
-  }
-  50% {
-    filter: drop-shadow(0 0 11px color-mix(in srgb, var(--brand) 85%, transparent))
-      drop-shadow(0 0 2px color-mix(in srgb, var(--brand) 100%, transparent));
-  }
-}
-
-.diagram-edge-glow {
-  animation: diagram-glow-pulse 1.4s ease-in-out infinite;
-}
-
-/* Same breathing idea, applied to a node's ring instead of an edge's
-   stroke. `--node-glow-color` is set inline per node (StoryNode.tsx) since
-   the accent varies by node kind — the animation only owns the pulse. */
-@keyframes diagram-node-glow {
-  0%,
-  100% {
-    box-shadow:
-      var(--shadow-raised),
-      0 0 0 1px var(--node-glow-color, var(--brand)),
-      0 0 16px 2px color-mix(in srgb, var(--node-glow-color, var(--brand)) 45%, transparent);
-  }
-  50% {
-    box-shadow:
-      var(--shadow-raised),
-      0 0 0 1.5px var(--node-glow-color, var(--brand)),
-      0 0 32px 6px color-mix(in srgb, var(--node-glow-color, var(--brand)) 70%, transparent);
-  }
-}
-
-.diagram-node-glow {
-  animation: diagram-node-glow 1.8s ease-in-out infinite;
-}
-
-/* Particles traveling along an active edge's path (see StoryEdge in
-   ArchitectureDiagram.tsx) — a soft fade at each loop's start/end so the
-   dot doesn't pop discontinuously when animateMotion restarts. */
-@keyframes diagram-particle-fade {
-  0%,
-  6%,
-  94%,
-  100% {
-    opacity: 0;
-  }
-  12%,
-  88% {
-    opacity: 1;
-  }
-}
-
-.diagram-edge-particle {
-  animation: diagram-particle-fade 1.3s linear infinite;
-}
-
-/* Token Chain panel (components/TokenChainPanel.tsx) — a vertical timeline
-   connecting token cards through RFC 8693 exchange stages. */
-
-@keyframes token-flow-dot {
-  0% {
-    top: -4px;
-    opacity: 0;
-  }
-  12%,
-  88% {
-    opacity: 1;
-  }
-  100% {
-    top: 100%;
-    opacity: 0;
-  }
-}
-
-.token-flow-line {
+.auth-card {
   position: relative;
-  width: 2px;
-  min-height: 28px;
-  background: var(--border);
-  margin: 0 auto;
+  display: flex;
+  gap: 13px;
+  overflow: hidden;
+  width: min(100%, 470px);
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--brand) 9%, var(--canvas-raised)), var(--canvas-raised) 65%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 8%, transparent), 0 10px 28px color-mix(in srgb, var(--brand) 14%, transparent);
+  animation: auth-arrive 0.42s cubic-bezier(.2,.8,.2,1) both;
 }
+.auth-card::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(110deg, transparent 15%, color-mix(in srgb, white 25%, transparent) 48%, transparent 70%); transform: translateX(-120%); animation: auth-sheen 2.8s 0.4s ease-out 1; }
+.auth-card__orb { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 38px; height: 38px; color: var(--brand); border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--brand) 13%, var(--canvas-raised)); box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand) 6%, transparent), 0 0 22px color-mix(in srgb, var(--brand) 28%, transparent); animation: auth-pulse 2.2s ease-in-out infinite; }
+.auth-card__body { min-width: 0; }
+.auth-card__eyebrow { margin: 0; color: var(--brand); font-size: 9px; font-weight: 800; letter-spacing: .16em; }
+.auth-card__title { margin: 4px 0 5px; color: var(--ink); font-size: 13px; font-weight: 700; }
+.auth-card__copy { margin: 0; color: var(--ink-muted); font-size: 11.5px; line-height: 1.55; }
+.auth-card__copy strong { color: var(--ink); font-weight: 700; }
+.auth-card__status { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--brand); font-size: 10px; font-weight: 700; }
+.auth-card__pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); animation: auth-dot 1.8s ease-out infinite; }
+@keyframes auth-arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes auth-sheen { to { transform: translateX(120%); } }
+@keyframes auth-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+@keyframes auth-dot { 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 
-.token-flow-line.active {
-  background: color-mix(in srgb, var(--brand) 45%, var(--border));
-}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background-color: var(--border); border-radius: 999px; }
 
-.token-flow-line .token-flow-dot {
-  position: absolute;
-  left: 50%;
-  width: 7px;
-  height: 7px;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: var(--brand);
-  box-shadow: 0 0 10px 2px color-mix(in srgb, var(--brand) 75%, transparent);
-  animation: token-flow-dot 1.6s linear infinite;
-}
-
-/* A slow diagonal shimmer sweeping across a populated token card's top
-   accent bar — reads as "cryptographic material", distinct from the
-   diagram's breathing node glow (diagram-node-glow), which is a state
-   indicator rather than decoration. */
-@keyframes token-card-shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
-.token-card-accent {
-  background-image: linear-gradient(
-    100deg,
-    var(--token-accent, var(--brand)) 0%,
-    color-mix(in srgb, var(--token-accent, var(--brand)) 40%, transparent) 35%,
-    var(--token-accent, var(--brand)) 50%,
-    color-mix(in srgb, var(--token-accent, var(--brand)) 40%, transparent) 65%,
-    var(--token-accent, var(--brand)) 100%
-  );
-  background-size: 250% 100%;
-  animation: token-card-shimmer 3.2s linear infinite;
-}
-
-@keyframes token-chip-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent);
-  }
-}
-
-.token-identity-chip {
-  animation: token-chip-pulse 2s ease-out infinite;
-}
+.react-flow { --xy-background-color: var(--canvas); --xy-background-pattern-dots-color-default: var(--border); --xy-edge-stroke-default: var(--border); --xy-edge-label-background-color-default: var(--canvas); --xy-edge-label-color-default: var(--ink-muted); --xy-controls-button-background-color: var(--canvas-raised); --xy-controls-button-background-color-hover: var(--code-bg); --xy-controls-button-color: var(--ink-muted); --xy-controls-button-color-hover: var(--ink); --xy-controls-button-border-color: var(--border); --xy-controls-box-shadow: var(--shadow-raised); --xy-minimap-background-color-default: var(--canvas-raised); }
+.react-flow__controls { border-radius: 10px; overflow: hidden; box-shadow: var(--shadow-raised); }
+.react-flow__controls-button { border-bottom-color: var(--border) !important; }
+@keyframes diagram-flow { to { stroke-dashoffset: -20; } }
+.diagram-edge-flow { animation: diagram-flow 1.2s linear infinite; }

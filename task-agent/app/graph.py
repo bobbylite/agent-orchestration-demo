@@ -167,12 +167,14 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     configurable = (request.runtime.config or {}).get("configurable", {})
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
+    ciba_token = configurable.get("ciba_token")
 
     allowed, reason, policy_context = await policy.check_with_authorize(
         settings,
         tool_name=tool_name,
         client_id=client_id,
         subject_token=delegation_token,
+        ciba_token=ciba_token,
     )
     if not allowed:
         if reason == "agent_acl_denied":
@@ -181,7 +183,8 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
             message = policy_context or "Denied: the delegated user is not authorized for the todos group."
         else:
             message = "Denied: the todos authorization decision could not be established."
-        return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
+        marker = "CIBA_REQUIRED" if reason == "ciba_required" else ""
+        return ToolMessage(content=f"{marker}: {message}" if marker else message, tool_call_id=request.tool_call["id"])
 
     scope_setting = _REQUIRED_SCOPE_SETTING.get(tool_name)
     if not scope_setting or not delegation_token:
@@ -218,10 +221,13 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         tool_name=tool_name,
         exchanged_token=mcp_token,
         client_id=client_id,
+        ciba_token=ciba_token,
     )
     if not task_allowed:
         message = (
-            "Denied: the todos task policy did not permit this tool call."
+            "CIBA_REQUIRED: User approval is required before this task can continue."
+            if task_reason == "ciba_required"
+            else "Denied: the todos task policy did not permit this tool call."
             if task_reason == "task_policy_denied"
             else "Denied: the todos task policy decision could not be established."
         )

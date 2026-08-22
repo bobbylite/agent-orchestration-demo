@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     authorize_delegate_tasks_policy_value: str = Field(default="true")
     authorize_task_policy_parameter: str = Field(default="evaluateTaskPolicy")
     authorize_task_policy_value: str = Field(default="true")
+    authorize_ciba_token_parameter: str = Field(default="cibaToken")
+    authorize_ciba_flow_parameter: str = Field(default="cibaFlow")
+    authorize_ciba_no_token_value: str = Field(default="false")
+    ciba_header_name: str = Field(default="X-CIBA-Token")
+    ciba_required_marker: str = Field(default="ciba_required")
 
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")

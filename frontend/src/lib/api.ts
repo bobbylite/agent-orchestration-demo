@@ -111,11 +111,6 @@ export const api = {
   getAuthorizeDecisions: () => getJson<{ entries: AuthorizeDecisionEntry[] }>("/task-agent-api/authorize/decisions"),
   clearAuthorizeDecisions: () =>
     getJson<{ cleared: number }>("/task-agent-api/authorize/decisions", { method: "DELETE" }),
-  /** Approve delegating to the Task Agent — Client Credentials + RFC 8693
-   * Token Exchange, scoped generically (not per todos:read/write action;
-   * the Task Agent decides that itself once it holds this credential). */
-  approveAgentAction: () =>
-    getJson<{ delegated: boolean }>("/api/auth/agent-token", { method: "POST" }),
   loginUrl: "/api/auth/login",
   logoutUrl: "/api/auth/logout",
 }
@@ -124,11 +119,12 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
+  onAuthorizationRequired?: (payload: { email?: string }) => void
   /** The agent tried to act on the user's behalf without a delegation
    * credential yet. Not an error — the turn continues normally and the
    * model explains it in its own words; this is the deterministic signal
    * for rendering an inline "Approve Agent Action" prompt. */
-  onAuthRequired?: () => void
+  onAuthRequired?: (payload: { mechanism?: string }) => void
   onRawEvent?: (event: string, data: string) => void
 }
 
@@ -181,7 +177,8 @@ export async function streamInvoke(
       if (eventName === "token") handlers.onToken(parsed.text)
       else if (eventName === "done") handlers.onDone()
       else if (eventName === "error") handlers.onError(parsed.message)
-      else if (eventName === "auth_required") handlers.onAuthRequired?.()
+      else if (eventName === "authorization_required") handlers.onAuthorizationRequired?.(parsed)
+      else if (eventName === "auth_required") handlers.onAuthRequired?.(parsed)
     }
   }
 }

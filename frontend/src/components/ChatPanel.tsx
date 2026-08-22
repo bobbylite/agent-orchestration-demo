@@ -128,7 +128,7 @@ function AuthorizationCard({ email, bindingMessage }: { email?: string; bindingM
           An authorization request is waiting in the inbox for <strong>{email ?? "your account"}</strong>.
           Follow the instructions in that email and confirm code <strong>{bindingMessage ?? "shown in the message"}</strong>. I&rsquo;ll continue automatically once approval is confirmed.
         </p>
-        <div className="auth-card__status"><span className="auth-card__pulse" />Awaiting secure approval</div>
+        <div className="auth-card__status"><span className="auth-card__pulse" />Awaiting approval</div>
       </div>
     </div>
   )

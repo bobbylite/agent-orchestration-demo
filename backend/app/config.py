@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     ciba_token_auth_method: str = Field(default="client_secret_basic")
     ciba_token_max_age: int = Field(default=3600)
     ciba_scope: str = Field(default="openid ciba")
-    ciba_binding_message: str = Field(default="DEL12345")
+    ciba_binding_message_length: int = Field(default=8)
     ciba_requested_expiry: int = Field(default=300)
     ciba_http_timeout: float = Field(default=10.0)
     ciba_poll_timeout: float = Field(default=300.0)

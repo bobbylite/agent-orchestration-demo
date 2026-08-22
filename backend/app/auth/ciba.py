@@ -6,11 +6,18 @@ keep both values server-side and expose only an opaque approval id/status.
 
 from __future__ import annotations
 
+import secrets
+import string
 from typing import Any
 
 import httpx
 
 CIBA_GRANT_TYPE = "urn:openid:params:grant-type:ciba"
+
+
+def generate_binding_message(length: int = 8) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(max(1, min(length, 8))))
 
 
 class CibaError(Exception):
@@ -35,7 +42,7 @@ def _auth_kwargs(settings, method: str) -> tuple[dict[str, str], dict[str, Any]]
     raise CibaError("Unsupported CIBA client authentication method")
 
 
-async def start(settings, *, login_hint: str) -> dict[str, Any]:
+async def start(settings, *, login_hint: str, binding_message: str | None = None) -> dict[str, Any]:
     required = (
         settings.ciba_authorization_endpoint,
         settings.ciba_token_endpoint,
@@ -51,7 +58,7 @@ async def start(settings, *, login_hint: str) -> dict[str, Any]:
     data = {
         **auth_data,
         "login_hint": login_hint,
-        "binding_message": settings.ciba_binding_message,
+        "binding_message": binding_message or generate_binding_message(settings.ciba_binding_message_length),
         "requested_expiry": str(settings.ciba_requested_expiry),
         "scope": settings.ciba_scope,
     }

@@ -24,6 +24,7 @@ class Approval:
 
 
 _records: dict[str, Approval] = {}
+_token_cache: dict[str, tuple[str, float]] = {}
 _MAX_RECORDS = 300
 
 
@@ -65,7 +66,23 @@ def remove(approval_id: str) -> None:
     _records.pop(approval_id, None)
 
 
+def get_token(session_sub: str) -> str | None:
+    cached = _token_cache.get(session_sub)
+    if not cached:
+        return None
+    token, expires_at = cached
+    if expires_at <= time.time():
+        _token_cache.pop(session_sub, None)
+        return None
+    return token
+
+
+def store_token(session_sub: str, token: str, expires_in: int) -> None:
+    _token_cache[session_sub] = (token, time.time() + max(1, expires_in))
+
+
 def clear_for_session(session_sub: str) -> None:
     for key, item in list(_records.items()):
         if item.session_sub == session_sub:
             _records.pop(key, None)
+    _token_cache.pop(session_sub, None)

@@ -10,6 +10,8 @@ export interface ChatMessage {
    * successful inline approval can automatically retry it. */
   sourceUserContent?: string
   authorizationRequired?: boolean
+  authorizationEmail?: string
+  authorizationCode?: string
 }
 
 interface Props {
@@ -74,7 +76,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
                 >
                   {message.role === "assistant" ? (
                     message.authorizationRequired ? (
-                      <AuthorizationCard />
+                      <AuthorizationCard email={message.authorizationEmail} bindingMessage={message.authorizationCode} />
                     ) : message.content ? (
                       <Markdown content={message.content} />
                     ) : (
@@ -115,16 +117,16 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
   )
 }
 
-function AuthorizationCard() {
+function AuthorizationCard({ email, bindingMessage }: { email?: string; bindingMessage?: string }) {
   return (
     <div className="auth-card" role="status" aria-live="polite">
       <div className="auth-card__orb" aria-hidden="true"><ShieldIcon /></div>
       <div className="auth-card__body">
-        <p className="auth-card__eyebrow">SECURE CHECKPOINT</p>
+        <p className="auth-card__eyebrow">Trust this agent to act on your behalf</p>
         <p className="auth-card__title">Your authorization is needed</p>
         <p className="auth-card__copy">
-          An authorization request is waiting in the inbox for <strong>example@server.com</strong>.
-          Follow the instructions in that email. I&rsquo;ll continue automatically once approval is confirmed.
+          An authorization request is waiting in the inbox for <strong>{email ?? "your account"}</strong>.
+          Follow the instructions in that email and confirm code <strong>{bindingMessage ?? "shown in the message"}</strong>. I&rsquo;ll continue automatically once approval is confirmed.
         </p>
         <div className="auth-card__status"><span className="auth-card__pulse" />Awaiting secure approval</div>
       </div>

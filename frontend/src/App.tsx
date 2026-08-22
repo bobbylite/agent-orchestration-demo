@@ -50,7 +50,7 @@ export default function App() {
           )
         },
         onDone: () => setSending(false),
-        onAuthorizationRequired: () => {
+        onAuthorizationRequired: (payload) => {
           setSending(false)
           setMessages((prev) =>
             prev.map((m) =>
@@ -59,6 +59,8 @@ export default function App() {
                     ...m,
                     content: "",
                     authorizationRequired: true,
+                    authorizationEmail: payload.email,
+                    authorizationCode: payload.binding_message,
                   }
                 : m,
             ),

@@ -119,7 +119,7 @@ export interface StreamHandlers {
   onToken: (text: string) => void
   onDone: () => void
   onError: (message: string) => void
-  onAuthorizationRequired?: (payload: { email?: string }) => void
+  onAuthorizationRequired?: (payload: { email?: string; binding_message?: string }) => void
   /** The agent tried to act on the user's behalf without a delegation
    * credential yet. Not an error — the turn continues normally and the
    * model explains it in its own words; this is the deterministic signal

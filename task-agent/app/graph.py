@@ -476,6 +476,20 @@ def _judge_routing(state: AgentState) -> str:
     return "retry" if state.get("judge_status") == "fail" else "done"
 
 
+def _tool_routing(state: AgentState) -> str:
+    """Stop immediately after a deterministic CIBA denial.
+
+    The policy gate already ran in ``_scoped_tool_call``. When it returns the
+    reserved marker, there is no useful model work left: sending the denial
+    through ``task_assistant`` and then ``judge`` only adds latency and can
+    obscure the machine-readable signal with a paraphrase. Other tool results
+    follow the normal ReAct loop so the assistant can explain them naturally.
+    """
+    latest = state["messages"][-1] if state.get("messages") else None
+    content = _extract_text(getattr(latest, "content", ""))
+    return "done" if content.startswith("CIBA_REQUIRED") else "continue"
+
+
 async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_budget: int | None = None) -> CompiledStateGraph:
     tools = await _get_mcp_tools(settings)
 
@@ -491,7 +505,7 @@ async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_
         graph.add_node("judge", _build_judge_node(settings, judge_budget))
         graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: "judge"})
         graph.add_conditional_edges("judge", _judge_routing, {"retry": "task_assistant", "done": END})
-        graph.add_edge("execute_tool", "task_assistant")
+        graph.add_conditional_edges("execute_tool", _tool_routing, {"done": END, "continue": "task_assistant"})
         return graph.compile()
 
     graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: END})

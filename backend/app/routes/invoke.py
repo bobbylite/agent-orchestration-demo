@@ -11,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.graph import resolved_model_label
 from app.agent.tools import CIBA_REQUIRED_MARKER
-from app.auth import ciba
+from app.auth import ciba, ciba_store
 from app.auth.inbound import InboundAuthError, verify_inbound_token
 from app.auth.routes import _mint_agent_token
 from app.auth.session import CIBA_TOKEN_COOKIE, EXCHANGED_TOKEN_COOKIE, SESSION_COOKIE, read_cookie, set_sealed_cookie
@@ -42,7 +42,7 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
     sub = session.get("sub")
     agent_client_id: str | None = None
     delegated_token: str | None = None
-    ciba_token: str | None = None
+    ciba_token: str | None = ciba_store.get_token(session.get("sub", ""))
     ciba_entry = read_cookie(request, CIBA_TOKEN_COOKIE, settings)
     if ciba_entry and isinstance(ciba_entry.get("access_token"), str):
         ciba_token = ciba_entry["access_token"]
@@ -72,8 +72,12 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
 
     event_response: EventSourceResponse
 
-    async def _start_and_poll_ciba() -> dict[str, Any]:
-        started = await ciba.start(settings, login_hint=session.get("email") or session.get("sub") or "")
+    async def _start_and_poll_ciba(binding_message: str) -> dict[str, Any]:
+        started = await ciba.start(
+            settings,
+            login_hint=session.get("email") or session.get("sub") or "",
+            binding_message=binding_message,
+        )
         deadline = time.monotonic() + min(started["expires_in"], settings.ciba_poll_timeout)
         interval = started["interval"]
         while time.monotonic() < deadline:
@@ -167,16 +171,18 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                         return
 
                     ciba_attempted = True
+                    binding_message = ciba.generate_binding_message(settings.ciba_binding_message_length)
                     yield {
                         "event": "authorization_required",
-                        "data": json.dumps({"email": "example@server.com"}),
+                        "data": json.dumps({"email": session.get("email") or session.get("preferred_username") or session.get("sub") or "your account", "binding_message": binding_message}),
                     }
                     try:
-                        token_body = await _start_and_poll_ciba()
+                        token_body = await _start_and_poll_ciba(binding_message)
                     except ciba.CibaError as exc:
                         yield {"event": "error", "data": json.dumps({"message": str(exc)})}
                         return
                     ciba_token = token_body["access_token"]
+                    ciba_store.store_token(session.get("sub", ""), ciba_token, int(token_body.get("expires_in", settings.ciba_token_max_age)))
                     # The SSE response has already started, so Set-Cookie
                     # cannot be added here. The token stays in this request's
                     # closure and is sent on the immediate retry below.

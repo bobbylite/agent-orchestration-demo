@@ -101,21 +101,20 @@ body { margin: 0; overscroll-behavior: none; background-color: var(--canvas); co
   overflow: hidden;
   width: min(100%, 470px);
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--brand) 38%, var(--border));
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--brand) 9%, var(--canvas-raised)), var(--canvas-raised) 65%);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 8%, transparent), 0 10px 28px color-mix(in srgb, var(--brand) 14%, transparent);
+  background: var(--canvas-raised);
+  box-shadow: var(--shadow-raised);
   animation: auth-arrive 0.42s cubic-bezier(.2,.8,.2,1) both;
 }
-.auth-card::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(110deg, transparent 15%, color-mix(in srgb, white 25%, transparent) 48%, transparent 70%); transform: translateX(-120%); animation: auth-sheen 2.8s 0.4s ease-out 1; }
-.auth-card__orb { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 38px; height: 38px; color: var(--brand); border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--brand) 13%, var(--canvas-raised)); box-shadow: 0 0 0 5px color-mix(in srgb, var(--brand) 6%, transparent), 0 0 22px color-mix(in srgb, var(--brand) 28%, transparent); animation: auth-pulse 2.2s ease-in-out infinite; }
+.auth-card__orb { display: flex; flex: 0 0 auto; align-items: center; justify-content: center; width: 38px; height: 38px; color: var(--ink); border: 1px solid var(--border); border-radius: 50%; background: var(--code-bg); animation: auth-pulse 2.2s ease-in-out infinite; }
 .auth-card__body { min-width: 0; }
 .auth-card__eyebrow { margin: 0; color: var(--brand); font-size: 9px; font-weight: 800; letter-spacing: .16em; }
 .auth-card__title { margin: 4px 0 5px; color: var(--ink); font-size: 13px; font-weight: 700; }
 .auth-card__copy { margin: 0; color: var(--ink-muted); font-size: 11.5px; line-height: 1.55; }
 .auth-card__copy strong { color: var(--ink); font-weight: 700; }
-.auth-card__status { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--brand); font-size: 10px; font-weight: 700; }
-.auth-card__pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 0 color-mix(in srgb, var(--brand) 50%, transparent); animation: auth-dot 1.8s ease-out infinite; }
+.auth-card__status { display: flex; align-items: center; gap: 6px; margin-top: 10px; color: var(--ink-muted); font-size: 10px; font-weight: 700; }
+.auth-card__pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 40%, transparent); animation: auth-dot 1.8s ease-out infinite; }
 @keyframes auth-arrive { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes auth-sheen { to { transform: translateX(120%); } }
 @keyframes auth-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }

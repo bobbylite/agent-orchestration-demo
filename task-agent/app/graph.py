@@ -122,12 +122,12 @@ async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):
 
 
 # Tool name -> which Settings attribute names the scope to request for it.
-_REQUIRED_SCOPE_SETTING = {
-    "list_todos": "todos_read_scope",
-    "add_todo": "todos_write_scope",
-    "complete_todo": "todos_write_scope",
-    "reopen_todo": "todos_write_scope",
-    "delete_todo": "todos_delete_scope",
+_TOOL_CAPABILITY = {
+    "list_todos": ("read", "todos_read_scope"),
+    "add_todo": ("write", "todos_write_scope"),
+    "complete_todo": ("write", "todos_write_scope"),
+    "reopen_todo": ("write", "todos_write_scope"),
+    "delete_todo": ("delete", "todos_delete_scope"),
 }
 
 
@@ -167,7 +167,13 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     configurable = (request.runtime.config or {}).get("configurable", {})
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
-    ciba_token = configurable.get("ciba_token")
+    ciba_tokens = configurable.get("ciba_tokens", {})
+    capability_entry = _TOOL_CAPABILITY.get(tool_name)
+    if not capability_entry or not delegation_token:
+        return ToolMessage(content=f"Cannot call '{tool_name}': unsupported tool or missing delegation.", tool_call_id=request.tool_call["id"])
+    capability, scope_setting = capability_entry
+    required_scope = getattr(settings, scope_setting)
+    ciba_token = ciba_tokens.get(capability) if isinstance(ciba_tokens, dict) else None
 
     allowed, reason, policy_context = await policy.check_with_authorize(
         settings,
@@ -183,16 +189,8 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
             message = policy_context or "Denied: the delegated user is not authorized for the todos group."
         else:
             message = "Denied: the todos authorization decision could not be established."
-        marker = "CIBA_REQUIRED" if reason == "ciba_required" else ""
+        marker = f"CIBA_REQUIRED:{capability}" if reason == "ciba_required" else ""
         return ToolMessage(content=f"{marker}: {message}" if marker else message, tool_call_id=request.tool_call["id"])
-
-    scope_setting = _REQUIRED_SCOPE_SETTING.get(tool_name)
-    if not scope_setting or not delegation_token:
-        return ToolMessage(
-            content=f"Cannot call '{tool_name}': no delegation token available for this task.",
-            tool_call_id=request.tool_call["id"],
-        )
-    required_scope = getattr(settings, scope_setting)
 
     try:
         mcp_token = await _get_mcp_scoped_token(
@@ -225,7 +223,7 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     )
     if not task_allowed:
         message = (
-            "CIBA_REQUIRED: User approval is required before this task can continue."
+            f"CIBA_REQUIRED:{capability}: User approval is required before this task can continue."
             if task_reason == "ciba_required"
             else "Denied: the todos task policy did not permit this tool call."
             if task_reason == "task_policy_denied"
@@ -509,5 +507,5 @@ async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_
         return graph.compile()
 
     graph.add_conditional_edges("task_assistant", tools_condition, {"tools": "execute_tool", END: END})
-    graph.add_edge("execute_tool", "task_assistant")
+    graph.add_conditional_edges("execute_tool", _tool_routing, {"done": END, "continue": "task_assistant"})
     return graph.compile()

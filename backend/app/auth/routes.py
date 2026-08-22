@@ -248,9 +248,9 @@ async def ciba_start(request: Request, settings: Settings = Depends(get_settings
         started = await ciba.start(settings, login_hint=session.get("email") or session["sub"])
     except CibaError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    item = ciba_store.add(
-        session_sub=session["sub"], access_token=session["access_token"],
-        auth_req_id=started["auth_req_id"], expires_in=started["expires_in"], interval=started["interval"],
+    item = ciba_store.create(
+        session_sub=session["sub"], session_token=session["access_token"], scope=required_scope,
+        auth_req_id=started["auth_req_id"], expires_in=started["expires_in"],
     )
     return {"approval_id": item.approval_id, "interval": item.interval, "expires_in": started["expires_in"]}
 
@@ -261,7 +261,7 @@ async def ciba_poll(request: Request, response: Response, approval_id: str, sett
     if not session or not session.get("access_token") or not session.get("sub"):
         raise HTTPException(status_code=401, detail="Sign in with PingOne first")
     item = ciba_store.get(approval_id)
-    if not item or not ciba_store.owns(item, session_sub=session["sub"], access_token=session["access_token"]):
+    if not item or not ciba_store.owns(item, session_sub=session["sub"], session_token=session["access_token"], scope=item.scope):
         raise HTTPException(status_code=404, detail="CIBA approval not found")
     async with item.lock:
         if item.status == "expired":

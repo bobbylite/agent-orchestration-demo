@@ -1,12 +1,12 @@
-"""Bounded, session-bound, single-use CIBA approvals for this demo."""
+"""Session-bound CIBA approval cache, keyed by downstream capability."""
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import secrets
 import time
 from dataclasses import dataclass, field
+import asyncio
 
 
 @dataclass
@@ -14,38 +14,54 @@ class Approval:
     approval_id: str
     session_sub: str
     session_binding: str
+    capability: str
     auth_req_id: str
     expires_at: float
-    next_poll_at: float
-    interval: float
     status: str = "pending"
-    token: str | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 _records: dict[str, Approval] = {}
-_token_cache: dict[str, tuple[str, float]] = {}
-_MAX_RECORDS = 300
+_tokens: dict[str, dict[str, tuple[str, float]]] = {}
+_ALLOWED_CAPABILITIES = {"read", "write", "delete"}
+_MAX_APPROVALS = 3
 
 
-def binding(access_token: str) -> str:
-    return hashlib.sha256(access_token.encode()).hexdigest()
+def _binding(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
-def add(*, session_sub: str, access_token: str, auth_req_id: str, expires_in: int, interval: float) -> Approval:
-    if len(_records) >= _MAX_RECORDS:
-        now = time.time()
-        for key, item in list(_records.items()):
-            if item.expires_at <= now or item.status != "pending":
-                _records.pop(key, None)
+def get_tokens(session_sub: str) -> dict[str, str]:
+    now = time.time()
+    capability_tokens = _tokens.get(session_sub, {})
+    active: dict[str, str] = {}
+    for capability, (token, expires_at) in list(capability_tokens.items()):
+        if capability not in _ALLOWED_CAPABILITIES or expires_at <= now:
+            capability_tokens.pop(capability, None)
+        else:
+            active[capability] = token
+    return active
+
+
+def store_token(session_sub: str, capability: str, token: str, expires_in: int) -> None:
+    if capability not in _ALLOWED_CAPABILITIES:
+        raise ValueError("unsupported CIBA capability")
+    _tokens.setdefault(session_sub, {})[capability] = (token, time.time() + max(1, expires_in))
+
+
+def create(*, session_sub: str, session_token: str, capability: str, auth_req_id: str, expires_in: int) -> Approval:
+    if capability not in _ALLOWED_CAPABILITIES:
+        raise ValueError("unsupported CIBA capability")
+    get_tokens(session_sub)
+    if capability not in _tokens.get(session_sub, {}) and len(_tokens.get(session_sub, {})) >= _MAX_APPROVALS:
+        raise ValueError("CIBA approval limit reached")
     item = Approval(
         approval_id=secrets.token_urlsafe(32),
         session_sub=session_sub,
-        session_binding=binding(access_token),
+        session_binding=_binding(session_token),
+        capability=capability,
         auth_req_id=auth_req_id,
         expires_at=time.time() + max(1, expires_in),
-        next_poll_at=time.monotonic(),
-        interval=max(0.1, interval),
     )
     _records[item.approval_id] = item
     return item
@@ -53,36 +69,25 @@ def add(*, session_sub: str, access_token: str, auth_req_id: str, expires_in: in
 
 def get(approval_id: str) -> Approval | None:
     item = _records.get(approval_id)
-    if item and item.status == "pending" and item.expires_at <= time.time():
+    if item and item.expires_at <= time.time():
         item.status = "expired"
     return item
 
 
-def owns(item: Approval, *, session_sub: str, access_token: str) -> bool:
-    return item.session_sub == session_sub and secrets.compare_digest(item.session_binding, binding(access_token))
+def owns(item: Approval, *, session_sub: str, session_token: str, capability: str) -> bool:
+    return (
+        item.session_sub == session_sub
+        and item.capability == capability
+        and secrets.compare_digest(item.session_binding, _binding(session_token))
+    )
 
 
 def remove(approval_id: str) -> None:
     _records.pop(approval_id, None)
 
 
-def get_token(session_sub: str) -> str | None:
-    cached = _token_cache.get(session_sub)
-    if not cached:
-        return None
-    token, expires_at = cached
-    if expires_at <= time.time():
-        _token_cache.pop(session_sub, None)
-        return None
-    return token
-
-
-def store_token(session_sub: str, token: str, expires_in: int) -> None:
-    _token_cache[session_sub] = (token, time.time() + max(1, expires_in))
-
-
 def clear_for_session(session_sub: str) -> None:
-    for key, item in list(_records.items()):
+    for approval_id, item in list(_records.items()):
         if item.session_sub == session_sub:
-            _records.pop(key, None)
-    _token_cache.pop(session_sub, None)
+            _records.pop(approval_id, None)
+    _tokens.pop(session_sub, None)

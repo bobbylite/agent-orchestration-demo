@@ -61,6 +61,7 @@ export default function App() {
                     authorizationRequired: true,
                     authorizationEmail: payload.email,
                     authorizationCode: payload.binding_message,
+                    authorizationCapability: payload.capability,
                   }
                 : m,
             ),

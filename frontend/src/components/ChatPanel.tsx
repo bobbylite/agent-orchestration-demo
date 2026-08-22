@@ -12,6 +12,7 @@ export interface ChatMessage {
   authorizationRequired?: boolean
   authorizationEmail?: string
   authorizationCode?: string
+  authorizationCapability?: "read" | "write" | "delete"
 }
 
 interface Props {
@@ -76,7 +77,7 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
                 >
                   {message.role === "assistant" ? (
                     message.authorizationRequired ? (
-                      <AuthorizationCard email={message.authorizationEmail} bindingMessage={message.authorizationCode} />
+                      <AuthorizationCard email={message.authorizationEmail} bindingMessage={message.authorizationCode} capability={message.authorizationCapability} />
                     ) : message.content ? (
                       <Markdown content={message.content} />
                     ) : (
@@ -117,13 +118,13 @@ export function ChatPanel({ messages, canSend, disabledReason, onSend }: Props) 
   )
 }
 
-function AuthorizationCard({ email, bindingMessage }: { email?: string; bindingMessage?: string }) {
+function AuthorizationCard({ email, bindingMessage, capability }: { email?: string; bindingMessage?: string; capability?: "read" | "write" | "delete" }) {
   return (
     <div className="auth-card" role="status" aria-live="polite">
       <div className="auth-card__orb" aria-hidden="true"><ShieldIcon /></div>
       <div className="auth-card__body">
         <p className="auth-card__eyebrow">Trust this agent to act on your behalf</p>
-        <p className="auth-card__title">Your authorization is needed</p>
+        <p className="auth-card__title">Your authorization is needed{capability ? ` to ${capability} your todos` : ""}</p>
         <p className="auth-card__copy">
           An authorization request is waiting in the inbox for <strong>{email ?? "your account"}</strong>.
           Follow the instructions in that email and confirm code <strong>{bindingMessage ?? "shown in the message"}</strong>. I&rsquo;ll continue automatically once approval is confirmed.

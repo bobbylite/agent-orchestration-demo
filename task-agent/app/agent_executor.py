@@ -8,6 +8,8 @@ CLAUDE.md's "core architectural decision" section.
 
 from __future__ import annotations
 
+import json
+
 from a2a.helpers import get_message_text, new_task_from_user_message, new_text_message, new_text_part
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -39,10 +41,21 @@ class TaskAgentExecutor(AgentExecutor):
         task_updater = TaskUpdater(event_queue=event_queue, task_id=task.id, context_id=task.context_id)
 
         headers = context.call_context.state.get("headers", {})
-        auth_header = headers.get("authorization", "")
-        token = auth_header.removeprefix("Bearer ").strip()
         normalized_headers = {str(key).lower(): value for key, value in headers.items()}
-        ciba_token = normalized_headers.get(self.settings.ciba_header_name.lower(), "").strip()
+        auth_header = normalized_headers.get("authorization", "")
+        token = auth_header.removeprefix("Bearer ").strip()
+        ciba_tokens: dict[str, str] = {}
+        raw_tokens = normalized_headers.get("x-ciba-tokens", "")
+        if raw_tokens:
+            try:
+                parsed = json.loads(raw_tokens)
+                if isinstance(parsed, dict):
+                    ciba_tokens = {str(k): str(v) for k, v in parsed.items() if isinstance(k, str) and isinstance(v, str) and v}
+            except (TypeError, ValueError):
+                ciba_tokens = {}
+        legacy = normalized_headers.get(self.settings.ciba_header_name.lower(), "").strip()
+        if legacy:
+            ciba_tokens["legacy"] = legacy
 
         if not token:
             await task_updater.failed(message=new_text_message("Missing bearer token."))
@@ -153,7 +166,7 @@ class TaskAgentExecutor(AgentExecutor):
                         "client_id": identity.agent_client_id,
                         "granted_scope": identity.scope,
                         "delegation_token": token,
-                        "ciba_token": ciba_token,
+                        "ciba_tokens": ciba_tokens,
                         "thread_id": task.context_id,
                     }
                 },
@@ -163,12 +176,18 @@ class TaskAgentExecutor(AgentExecutor):
             # paraphrases the ToolMessage into ordinary prose. The backend
             # uses this reserved prefix to emit the CIBA UI event; it is not
             # user-controlled text and carries no credential or request id.
-            if any(
-                _extract_text(message.content).startswith("CIBA_REQUIRED")
-                for message in result["messages"]
-                if hasattr(message, "content")
-            ):
-                answer = f"CIBA_REQUIRED: {answer}"
+            allowed_capabilities = {"read", "write", "delete"}
+            capabilities = sorted(
+                {
+                    capability
+                    for message in result["messages"]
+                    if hasattr(message, "content")
+                    for capability in allowed_capabilities
+                    if _extract_text(message.content).startswith(f"CIBA_REQUIRED:{capability}:")
+                }
+            )
+            if capabilities:
+                answer = "CIBA_REQUIRED:" + ",".join(capabilities)
             task_span.set_attribute("judge.final_status", result.get("judge_status") or "disabled")
             task_span.set_attribute("judge.attempts", result.get("judge_attempts", 0))
 

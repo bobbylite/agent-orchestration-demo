@@ -42,10 +42,7 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
     sub = session.get("sub")
     agent_client_id: str | None = None
     delegated_token: str | None = None
-    ciba_token: str | None = ciba_store.get_token(session.get("sub", ""))
-    ciba_entry = read_cookie(request, CIBA_TOKEN_COOKIE, settings)
-    if ciba_entry and isinstance(ciba_entry.get("access_token"), str):
-        ciba_token = ciba_entry["access_token"]
+    ciba_tokens = ciba_store.get_tokens(session.get("sub", ""))
 
     delegated_entry = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
     candidate_token = (delegated_entry or {}).get("access_token")
@@ -72,7 +69,7 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
 
     event_response: EventSourceResponse
 
-    async def _start_and_poll_ciba(binding_message: str) -> dict[str, Any]:
+    async def _start_and_poll_ciba(binding_message: str, required_scope: str) -> dict[str, Any]:
         started = await ciba.start(
             settings,
             login_hint=session.get("email") or session.get("sub") or "",
@@ -92,7 +89,7 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
         raise ciba.CibaError("Timed out waiting for PingOne approval")
 
     async def event_stream() -> AsyncIterator[dict]:
-        nonlocal delegated_token, ciba_token, agent_client_id, sub
+        nonlocal delegated_token, ciba_tokens, agent_client_id, sub
         with with_span(
             "agent.invoke",
             {
@@ -125,34 +122,37 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                         yield {"event": "error", "data": json.dumps({"message": f"Agent delegation failed: {exc}"})}
                         return
 
-                ciba_attempted = False
-                for attempt in range(2):
-                    ciba_required = False
+                attempted_scopes: set[str] = set()
+                for attempt in range(4):
+                    ciba_required: list[str] = []
                     output_chars = 0
                     async for event in request.app.state.graph.astream_events(
                         {"messages": [("human", body.message)]},
                         config={
                             "configurable": {
-                                "thread_id": body.thread_id,
+                                # The first graph attempt checkpoints the internal
+                                # CIBA marker. Retry in an isolated child thread so
+                                # the Chat Agent cannot replay that private ToolMessage
+                                # instead of issuing a fresh A2A call with the newly
+                                # approved CIBA capability token.
+                                "thread_id": body.thread_id if attempt == 0 else f"{body.thread_id}:ciba:{attempt}",
                                 "delegated_token": delegated_token,
                                 "task_agent_url": settings.task_agent_url,
                                 "caller_sub": sub or "",
                                 "caller_agent_client_id": agent_client_id or "",
-                                "ciba_token": ciba_token or "",
+                                "ciba_tokens": ciba_tokens,
                             }
                         },
                         version="v2",
                     ):
                         if event["event"] == "on_tool_end":
                             output = event["data"].get("output")
-                            content = getattr(output, "content", "")
+                            contents = output if isinstance(output, list) else [output]
                             tool_name = event.get("name")
-                            if (
-                                isinstance(content, str)
-                                and content.startswith(CIBA_REQUIRED_MARKER)
-                                and tool_name in _DELEGATING_TOOLS
-                            ):
-                                ciba_required = True
+                            for item in contents:
+                                content = getattr(item, "content", "")
+                                if isinstance(content, str) and content.startswith(CIBA_REQUIRED_MARKER + ":") and tool_name in _DELEGATING_TOOLS:
+                                    ciba_required.extend(capability for capability in content.removeprefix(CIBA_REQUIRED_MARKER + ":").split(",") if capability in {"read", "write", "delete"})
                             continue
                         if event["event"] != "on_chat_model_stream":
                             continue
@@ -162,27 +162,34 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
                         output_chars += len(text)
                         yield {"event": "token", "data": json.dumps({"text": text})}
 
-                    if not ciba_required or ciba_attempted:
+                    ciba_required = list(dict.fromkeys(ciba_required))
+                    if not ciba_required:
                         span.set_attribute("agent.output_chars", output_chars)
-                        if ciba_attempted and ciba_required:
-                            yield {"event": "error", "data": json.dumps({"message": "Authorization could not be confirmed. Please follow the instructions in the email and try again."})}
-                        else:
-                            yield {"event": "done", "data": json.dumps({})}
+                        yield {"event": "done", "data": json.dumps({})}
                         return
 
-                    ciba_attempted = True
+                    required_scope = next((scope for scope in ciba_required if scope not in attempted_scopes), None)
+                    if not required_scope:
+                        yield {"event": "error", "data": json.dumps({"message": "Authorization could not be confirmed."})}
+                        return
+                    attempted_scopes.add(required_scope)
                     binding_message = ciba.generate_binding_message(settings.ciba_binding_message_length)
                     yield {
                         "event": "authorization_required",
-                        "data": json.dumps({"email": session.get("email") or session.get("preferred_username") or session.get("sub") or "your account", "binding_message": binding_message}),
+                        "data": json.dumps({"email": session.get("email") or session.get("preferred_username") or session.get("sub") or "your account", "binding_message": binding_message, "capability": required_scope}),
                     }
                     try:
-                        token_body = await _start_and_poll_ciba(binding_message)
+                        token_body = await _start_and_poll_ciba(binding_message, required_scope)
                     except ciba.CibaError as exc:
                         yield {"event": "error", "data": json.dumps({"message": str(exc)})}
                         return
-                    ciba_token = token_body["access_token"]
-                    ciba_store.store_token(session.get("sub", ""), ciba_token, int(token_body.get("expires_in", settings.ciba_token_max_age)))
+                    ciba_tokens[required_scope] = token_body["access_token"]
+                    ciba_store.store_token(session.get("sub", ""), required_scope, ciba_tokens[required_scope], int(token_body.get("expires_in", settings.ciba_token_max_age)))
+                    # Record that the next graph invocation must receive the
+                    # newly-approved capability token; the following retry is
+                    # what drives the second Task Policy decision.
+                    span.set_attribute("ciba.capability", required_scope)
+                    span.set_attribute("ciba.retry", True)
                     # The SSE response has already started, so Set-Cookie
                     # cannot be added here. The token stays in this request's
                     # closure and is sent on the immediate retry below.

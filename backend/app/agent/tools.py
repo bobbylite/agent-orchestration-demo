@@ -14,6 +14,8 @@ here is trusted on say-so.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from a2a.client import A2ACardResolver, ClientConfig, create_client
 from a2a.helpers import new_text_message
@@ -85,9 +87,9 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
             )
 
         headers = {"Authorization": f"Bearer {delegated_token}"}
-        ciba_token = configurable.get("ciba_token")
-        if ciba_token:
-            headers["X-CIBA-Token"] = ciba_token
+        ciba_tokens = configurable.get("ciba_tokens", {})
+        if isinstance(ciba_tokens, dict) and ciba_tokens:
+            headers["X-CIBA-Tokens"] = json.dumps(ciba_tokens, separators=(",", ":"))
         async with httpx.AsyncClient(headers=headers, timeout=30) as httpx_client:
             resolver = A2ACardResolver(httpx_client=httpx_client, base_url=task_agent_url)
             card = await resolver.get_agent_card()
@@ -121,8 +123,10 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
             await client.close()
 
         span.set_attribute("a2a.result", "ok" if answer else "empty")
-        if answer and CIBA_REQUIRED_MARKER in answer:
-            return CIBA_REQUIRED_MARKER
+        if answer and answer.startswith(CIBA_REQUIRED_MARKER + ":"):
+            capabilities = answer.removeprefix(CIBA_REQUIRED_MARKER + ":")
+            if capabilities and all(capability in {"read", "write", "delete"} for capability in capabilities.split(",")):
+                return CIBA_REQUIRED_MARKER + ":" + capabilities
         return answer or "The Task Agent did not return a response."
 
 

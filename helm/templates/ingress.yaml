@@ -24,6 +24,21 @@ spec:
         - {{ .Values.ingress.todos.host }}
       secretName: {{ .Values.ingress.todos.tls.secretName }}
     {{- end }}
+    {{- if .Values.ingress.backend.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.backend.host }}
+      secretName: {{ .Values.ingress.backend.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.taskAgent.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.taskAgent.host }}
+      secretName: {{ .Values.ingress.taskAgent.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.mcpTodos.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.mcpTodos.host }}
+      secretName: {{ .Values.ingress.mcpTodos.tls.secretName }}
+    {{- end }}
   rules:
     - host: {{ .Values.ingress.console.host }}
       http:
@@ -43,6 +58,36 @@ spec:
             backend:
               service:
                 name: {{ include "agentorchestration.todosUiSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.backend.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.backendSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.taskAgent.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.taskAgentSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.mcpTodos.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.mcpTodosSvcName" . }}
                 port:
                   name: http
 {{- end }}

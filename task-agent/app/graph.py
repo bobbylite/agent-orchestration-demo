@@ -7,9 +7,11 @@ Same two-node assistant<->tools loop shape as the Chat Agent
 LangGraph ReAct pattern, not something bespoke per agent.
 
 The tools bound to the LLM (and to ToolNode, for routing) are fetched once
-per task purely for their schemas — mcp-todos-server's tools/list doesn't
-require auth, only actual tool *calls* do (see mcp-todos-server/app/mcp_server.py).
-The real work happens in `_scoped_tool_call` (wired in via ToolNode's
+per task purely for their schemas. Schema discovery is sent through the
+AI gateway with its separately injected bearer; actual tool calls continue
+to use the existing freshly-authorized MCP connection until the gateway's
+ downstream token contract is confirmed. The real work happens in
+`_scoped_tool_call` (wired in via ToolNode's
 `awrap_tool_call` hook, same mechanism policy enforcement already used):
 per call, it performs this service's own Client Credentials (proving "the
 Task Agent" itself) and then a fresh RFC 8693 Token Exchange — subject =
@@ -99,21 +101,28 @@ def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
         return exc.response.text or str(exc)
 
 
+def _mcp_connection(url: str, bearer_token: str | None = None) -> StreamableHttpConnection:
+    """Build one Streamable HTTP connection shape for an MCP endpoint."""
+    connection: StreamableHttpConnection = {"transport": "streamable_http", "url": url}
+    if bearer_token:
+        connection["headers"] = {"Authorization": f"Bearer {bearer_token}"}
+    return connection
+
+
 async def _get_mcp_tools(settings: Settings) -> list:
-    """Schema only — no Authorization header. tools/list doesn't require
-    one; actual invocation (_scoped_tool_call, below) always builds its own
-    freshly-authorized connection instead of reusing these tool objects."""
-    connection: StreamableHttpConnection = {"transport": "streamable_http", "url": settings.mcp_todos_url}
+    """Fetch MCP schemas through the AI gateway.
+
+    The gateway requires a bearer for its protected-resource endpoint. This
+    credential is injected out of process/configuration and is only used for
+    discovery; it is not the per-tool delegated credential.
+    """
+    connection = _mcp_connection(settings.mcp_gateway_url, settings.mcp_gateway_access_token)
     client = MultiServerMCPClient({"todos": connection})
     return await client.get_tools()
 
 
 async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):
-    connection: StreamableHttpConnection = {
-        "transport": "streamable_http",
-        "url": settings.mcp_todos_url,
-        "headers": {"Authorization": f"Bearer {bearer_token}"},
-    }
+    connection = _mcp_connection(settings.mcp_todos_url, bearer_token)
     client = MultiServerMCPClient({"todos": connection})
     for tool in await client.get_tools():
         if tool.name == tool_name:

@@ -11,6 +11,7 @@ data:
   ALLOWED_AGENT_CLIENT_ID: {{ .Values.taskAgent.env.ALLOWED_AGENT_CLIENT_ID | quote }}
   AGENT_TASK_SCOPE: {{ .Values.taskAgent.env.AGENT_TASK_SCOPE | quote }}
   MCP_TODOS_AUDIENCE: {{ include "agentorchestration.mcpTodosAudience" . | quote }}
+  MCP_GATEWAY_URL: {{ .Values.taskAgent.env.MCP_GATEWAY_URL | quote }}
   TODOS_READ_SCOPE: {{ .Values.taskAgent.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.taskAgent.env.TODOS_WRITE_SCOPE | quote }}
   TODOS_DELETE_SCOPE: {{ .Values.taskAgent.env.TODOS_DELETE_SCOPE | quote }}

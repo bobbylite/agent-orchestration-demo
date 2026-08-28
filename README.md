@@ -513,7 +513,8 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   downstream as the *subject* token for this service's own further
   exchange.
 - `task-agent/app/graph.py` — MCP tools fetched once per task for schema
-  only (no auth needed for `tools/list`); the real work is in
+  only through the configured AI gateway (`MCP_GATEWAY_URL`), using the
+  injected `MCP_GATEWAY_ACCESS_TOKEN`; the real work is in
   `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
   policy check, then this service's own Client Credentials (cached per
   task) + a **fresh, per-tool-call** Token Exchange scoped to exactly

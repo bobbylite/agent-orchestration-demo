@@ -183,9 +183,10 @@ into the tool-execution hook (see "RFC 8693 chained delegation" below):
 - `task_assistant` — its own Claude call, reasons about which MCP tool to
   invoke (`list_todos`/`add_todo`/`complete_todo`). Tools are fetched from
   `mcp-todos-server/` via `langchain_mcp_adapters.MultiServerMCPClient`
-  once per task **purely for their schemas** (`tools/list` needs no auth)
-  — bound to the LLM the same way as the Chat Agent's tools, but never
-  actually invoked through that connection.
+  once per task **purely for their schemas**, through the configured AI
+  gateway URL with its injected discovery bearer — bound to the LLM the same
+  way as the Chat Agent's tools, but never actually invoked through that
+  connection.
 - `execute_tool` — a `ToolNode` whose `awrap_tool_call` hook
   (`_scoped_tool_call`) does full custom dispatch, not just a gate: policy
   check, then this service's own delegation chain (Client Credentials +
@@ -696,9 +697,10 @@ not a bug.
 **mcp-todos-server now receives a token task-agent minted itself, not one
 forwarded unchanged.** Superseded by the 2026-08-16 redesign above:
 `task-agent/app/graph.py`'s MCP tools are fetched once per task purely for
-schemas (no auth needed for `tools/list`); the actual, freshly-authorized
-connection is built per tool call inside `_scoped_tool_call`, using a
-token from task-agent's *own* RFC 8693 exchange (step 4 in the chain
+schemas through the configured AI gateway using its injected
+`MCP_GATEWAY_ACCESS_TOKEN`; the actual, freshly-authorized direct MCP
+connection is built per tool call inside `_scoped_tool_call`, using a token
+from task-agent's *own* RFC 8693 exchange (step 4 in the chain
 above) — not a header carried over from the Chat Agent. `mcp-todos-server`
 still independently re-verifies whatever it receives, same as always;
 what changed is *whose* exchange produced it.
@@ -917,7 +919,10 @@ has these settings at all).
   it's now a two-service match, not three. `task-agent/app/graph.py`
   requests one of these via its own Token Exchange per tool call, and
   `mcp-todos-server/app/policy.py` checks the resulting token's `scope`
-  claim against its own copy.
+  claim against its own copy. Schema discovery uses the gateway endpoint
+  configured by `MCP_GATEWAY_URL` and the deployment-secret
+  `MCP_GATEWAY_ACCESS_TOKEN`; tool-call gateway routing remains a separate
+  rollout until the gateway's downstream token contract is confirmed.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*

@@ -114,11 +114,59 @@ async def _get_mcp_tools(settings: Settings) -> list:
 
     The gateway requires a bearer for its protected-resource endpoint. This
     credential is injected out of process/configuration and is only used for
-    discovery; it is not the per-tool delegated credential.
+    discovery; it is not the per-tool delegated credential. A gateway
+    rejection surfaces as a short message (the ExceptionGroup wrapping from
+    the MCP streamable client makes the raw error unreadable), not a crash
+    of the whole A2A task.
     """
     connection = _mcp_connection(settings.mcp_gateway_url, settings.mcp_gateway_access_token)
     client = MultiServerMCPClient({"todos": connection})
-    return await client.get_tools()
+    try:
+        return await client.get_tools()
+    except httpx.HTTPStatusError as exc:
+        raise _mcp_discovery_error(exc) from exc
+    except ExceptionGroup as exc:
+        nested = _find_http_status_error(exc)
+        if nested is not None:
+            raise _mcp_discovery_error(nested) from exc
+        raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — normalize to a readable failure, not a TaskGroup crash
+        raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
+
+
+def _find_http_status_error(exc: BaseException) -> httpx.HTTPStatusError | None:
+    """Find the HTTP failure hidden inside an AnyIO ExceptionGroup."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for nested in exc.exceptions:
+            match = _find_http_status_error(nested)
+            if match is not None:
+                return match
+    return None
+
+
+def _mcp_discovery_error(exc: httpx.HTTPStatusError) -> RuntimeError:
+    status_code = exc.response.status_code
+    detail = _pingone_error_detail(exc)
+    if status_code == 403:
+        return RuntimeError(
+            "Forbidden request: the AI Gateway's access policy does not permit this client "
+            "to discover or use the todos tools. An administrator must grant this client's "
+            "gateway policy access to the requested MCP tool, or issue the client a token "
+            "from an authorized gateway session (HTTP 403)."
+            f" {_detail_suffix(detail)}"
+        )
+    return RuntimeError(
+        "Unauthorized request: the MCP gateway did not accept the discovery credential. "
+        "A fresh gateway-issued access token is required (HTTP "
+        f"{status_code}). {_detail_suffix(detail)}"
+    )
+
+
+def _detail_suffix(detail: str) -> str:
+    cleaned = (detail or "").strip()
+    return f"({cleaned})" if cleaned else ""
 
 
 async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):

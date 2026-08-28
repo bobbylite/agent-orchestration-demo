@@ -134,7 +134,15 @@ class TaskAgentExecutor(AgentExecutor):
             judge_budget, judge_budget_reason = await policy.evaluate_judge_budget(
                 self.settings, subject_token=token, client_id=identity.agent_client_id
             )
-            graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
+            try:
+                graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
+            except RuntimeError as exc:
+                # Schema discovery through the MCP gateway failed cleanly
+                # (e.g. a 403 from an unauthorized/expired discovery token).
+                # Fail the A2A task with that readable reason instead of an
+                # opaque TaskGroup traceback.
+                await task_updater.failed(message=new_text_message(str(exc)))
+                return
             task_span.set_attribute("judge.max_attempts", judge_budget or self.settings.judge_max_attempts)
             if judge_budget_reason:
                 task_span.set_attribute("judge.budget_reason", judge_budget_reason)

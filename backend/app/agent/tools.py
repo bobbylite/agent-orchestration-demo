@@ -60,6 +60,7 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
     task_agent_url = configurable.get("task_agent_url")
     caller_sub = configurable.get("caller_sub", "")
     caller_agent_client_id = configurable.get("caller_agent_client_id", "")
+    gateway_access_token: str | None = configurable.get("gateway_access_token")
 
     with with_span(
         "agent.a2a_delegate",
@@ -90,6 +91,8 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
         ciba_tokens = configurable.get("ciba_tokens", {})
         if isinstance(ciba_tokens, dict) and ciba_tokens:
             headers["X-CIBA-Tokens"] = json.dumps(ciba_tokens, separators=(",", ":"))
+        if gateway_access_token:
+            headers["X-MCP-Gateway-Access-Token"] = gateway_access_token
         async with httpx.AsyncClient(headers=headers, timeout=30) as httpx_client:
             resolver = A2ACardResolver(httpx_client=httpx_client, base_url=task_agent_url)
             card = await resolver.get_agent_card()

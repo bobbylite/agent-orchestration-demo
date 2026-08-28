@@ -45,6 +45,7 @@ class TaskAgentExecutor(AgentExecutor):
         auth_header = normalized_headers.get("authorization", "")
         token = auth_header.removeprefix("Bearer ").strip()
         ciba_tokens: dict[str, str] = {}
+        gateway_access_token = normalized_headers.get("x-mcp-gateway-access-token", "").strip() or None
         raw_tokens = normalized_headers.get("x-ciba-tokens", "")
         if raw_tokens:
             try:
@@ -135,7 +136,12 @@ class TaskAgentExecutor(AgentExecutor):
                 self.settings, subject_token=token, client_id=identity.agent_client_id
             )
             try:
-                graph = await build_graph(self.settings, actor_cache=actor_cache, judge_budget=judge_budget)
+                graph = await build_graph(
+                    self.settings,
+                    actor_cache=actor_cache,
+                    gateway_access_token=gateway_access_token,
+                    judge_budget=judge_budget,
+                )
             except RuntimeError as exc:
                 # Schema discovery through the MCP gateway failed cleanly
                 # (e.g. a 403 from an unauthorized/expired discovery token).

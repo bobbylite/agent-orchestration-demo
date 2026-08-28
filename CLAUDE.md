@@ -698,8 +698,9 @@ not a bug.
 forwarded unchanged.** Superseded by the 2026-08-16 redesign above:
 `task-agent/app/graph.py`'s MCP tools are fetched once per task purely for
 schemas through the configured AI gateway using its injected
-`MCP_GATEWAY_ACCESS_TOKEN`; the actual, freshly-authorized direct MCP
-connection is built per tool call inside `_scoped_tool_call`, using a token
+the request-scoped gateway token forwarded over the internal A2A hop; the
+actual, freshly-authorized direct MCP connection is built per tool call inside
+`_scoped_tool_call`, using a token
 from task-agent's *own* RFC 8693 exchange (step 4 in the chain
 above) — not a header carried over from the Chat Agent. `mcp-todos-server`
 still independently re-verifies whatever it receives, same as always;
@@ -920,9 +921,10 @@ has these settings at all).
   requests one of these via its own Token Exchange per tool call, and
   `mcp-todos-server/app/policy.py` checks the resulting token's `scope`
   claim against its own copy. Schema discovery uses the gateway endpoint
-  configured by `MCP_GATEWAY_URL` and the deployment-secret
-  `MCP_GATEWAY_ACCESS_TOKEN`; tool-call gateway routing remains a separate
-  rollout until the gateway's downstream token contract is confirmed.
+  configured by `MCP_GATEWAY_URL` and authenticated with the user's
+  request-scoped gateway OAuth credential forwarded over A2A; tool-call
+  gateway routing remains a separate rollout until the gateway's downstream
+  token contract is confirmed.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*

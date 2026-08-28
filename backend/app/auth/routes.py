@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth import oidc
+from app.auth import gateway_oidc, oidc
 from app.auth.agent_auth import client_credentials_grant, token_exchange
 from app.auth import ciba, ciba_store
 from app.auth.ciba import CibaError
@@ -21,6 +21,8 @@ from app.auth.session import (
     AGENT_TOKEN_COOKIE,
     CIBA_TOKEN_COOKIE,
     EXCHANGED_TOKEN_COOKIE,
+    GATEWAY_STATE_COOKIE,
+    GATEWAY_TOKEN_COOKIE,
     SESSION_COOKIE,
     clear_cookie,
     read_cookie,
@@ -50,6 +52,29 @@ def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
 
 def _redirect_uri(settings: Settings) -> str:
     return f"{settings.app_base_url}/api/auth/callback"
+
+
+def _gateway_redirect_uri(settings: Settings) -> str:
+    return settings.gateway_redirect_uri or f"{settings.app_base_url}/api/auth/gateway/callback"
+
+
+def _gateway_token_is_fresh(entry: dict, settings: Settings) -> bool:
+    try:
+        return float(entry.get("expires_at", 0)) > time.time() + settings.gateway_refresh_skew
+    except (TypeError, ValueError):
+        return False
+
+
+def _gateway_state_cookie(response: Response, payload: dict, settings: Settings) -> None:
+    response.set_cookie(
+        key=GATEWAY_STATE_COOKIE,
+        value=seal_state(payload, settings),
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.app_base_url.startswith("https"),
+        path="/",
+    )
 
 
 @router.get("/login")
@@ -86,6 +111,67 @@ async def login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
         return response
 
 
+@router.get("/gateway/login")
+async def gateway_login(request: Request, settings: Settings = Depends(get_settings)) -> RedirectResponse:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    if not session or not session.get("sub"):
+        raise HTTPException(status_code=401, detail="Sign in with PingOne first")
+    if not settings.gateway_configured:
+        raise HTTPException(status_code=400, detail="AI Gateway OAuth is not configured")
+    verifier, challenge = generate_pkce_pair()
+    state = generate_token()
+    response = RedirectResponse(
+        gateway_oidc.authorization_url(
+            settings,
+            state=state,
+            code_challenge=challenge,
+            redirect_uri=_gateway_redirect_uri(settings),
+        )
+    )
+    _gateway_state_cookie(response, {"state": state, "verifier": verifier, "sub": session["sub"]}, settings)
+    return response
+
+
+@router.get("/gateway/callback")
+async def gateway_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    raw_state = request.cookies.get(GATEWAY_STATE_COOKIE)
+    saved = unseal_state(raw_state, settings) if raw_state else None
+    if error or not code or not state or not saved or saved.get("state") != state or saved.get("sub") != (session or {}).get("sub"):
+        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    try:
+        tokens = await gateway_oidc.exchange_code(
+            settings,
+            code=code,
+            code_verifier=saved["verifier"],
+            redirect_uri=_gateway_redirect_uri(settings),
+        )
+    except (httpx.HTTPError, RuntimeError):
+        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    if not tokens.get("access_token") or not session:
+        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    response = RedirectResponse(settings.frontend_origin)
+    clear_cookie(response, GATEWAY_STATE_COOKIE, settings)
+    set_sealed_cookie(
+        response,
+        GATEWAY_TOKEN_COOKIE,
+        {
+            "sub": session["sub"],
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens.get("refresh_token"),
+            "expires_at": time.time() + int(tokens.get("expires_in", 3600)),
+        },
+        settings,
+    )
+    return response
+
+
 @router.get("/callback")
 async def callback(
     request: Request,
@@ -117,7 +203,11 @@ async def callback(
         claims = await oidc.verify_id_token(metadata, settings, tokens["id_token"], nonce=saved["nonce"])
         span.set_attribute("identity.sub", claims.get("sub", ""))
 
-        response = RedirectResponse(settings.frontend_origin)
+        response = RedirectResponse(
+            f"{settings.app_base_url}/api/auth/gateway/login"
+            if settings.gateway_configured
+            else settings.frontend_origin
+        )
         clear_cookie(response, OIDC_STATE_COOKIE, settings)
         set_sealed_cookie(
             response,
@@ -163,6 +253,8 @@ async def logout(request: Request, settings: Settings = Depends(get_settings)) -
         clear_cookie(response, AGENT_TOKEN_COOKIE, settings)
         clear_cookie(response, EXCHANGED_TOKEN_COOKIE, settings)
         clear_cookie(response, CIBA_TOKEN_COOKIE, settings)
+        clear_cookie(response, GATEWAY_STATE_COOKIE, settings)
+        clear_cookie(response, GATEWAY_TOKEN_COOKIE, settings)
         ciba_store.clear_for_session((session or {}).get("sub", ""))
         return response
 
@@ -298,6 +390,13 @@ async def ciba_poll(request: Request, response: Response, approval_id: str, sett
 async def me(request: Request, settings: Settings = Depends(get_settings)) -> dict:
     session = read_cookie(request, SESSION_COOKIE, settings)
     delegated = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
+    gateway = read_cookie(request, GATEWAY_TOKEN_COOKIE, settings)
+    gateway_authenticated = bool(
+        gateway
+        and gateway.get("access_token")
+        and gateway.get("sub") == (session or {}).get("sub")
+        and _gateway_token_is_fresh(gateway, settings)
+    )
     return {
         "oidc_enabled": settings.oidc_configured,
         "agent_enabled": settings.agent_configured,
@@ -306,6 +405,9 @@ async def me(request: Request, settings: Settings = Depends(get_settings)) -> di
         "email": (session or {}).get("email"),
         "name": (session or {}).get("name"),
         "agent_delegated": bool(delegated),
+        "gateway_enabled": settings.gateway_configured,
+        "gateway_authenticated": gateway_authenticated,
+        "gateway_auth_required": bool(settings.gateway_configured and session and not gateway_authenticated),
     }
 
 

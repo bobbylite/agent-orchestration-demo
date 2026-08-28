@@ -261,6 +261,49 @@ as #3, one hop later:
 All six are independent — you can enable just the sign-in app first, add
 the rest as you go; each pair only unlocks once both its apps are filled in.
 
+### AI Gateway OAuth client for MCP discovery
+
+The Task Agent discovers MCP tool schemas through the AI Gateway. The Chat
+Agent signs the user into the gateway with a second Authorization Code + PKCE
+flow, separate from the PingOne login used for the delegation chain. Do not
+hardcode a gateway access token in `task-agent/.env`.
+
+Register a separate public OAuth client for this application:
+
+```bash
+curl -k -X POST \
+  'https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/register' \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "client_name": "Agent Orchestration Console",
+    "client_uri": "http://localhost:5173",
+    "redirect_uris": [
+      "http://localhost:8000/api/auth/gateway/callback"
+    ],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"]
+  }'
+```
+
+The gateway uses a self-signed certificate in some local environments, so
+`-k` may be required locally. Prefer installing the appropriate CA certificate
+instead of disabling verification in production. Copy the returned `client_id`
+into `backend/.env`:
+
+```env
+GATEWAY_CLIENT_ID=<returned-client-id>
+GATEWAY_CLIENT_AUTH_METHOD=none
+GATEWAY_REDIRECT_URI=http://localhost:8000/api/auth/gateway/callback
+```
+
+The callback URI must match the registered value exactly. After changing
+`backend/.env`, restart the backend because settings are cached at process
+startup. Gateway access and refresh tokens remain in an encrypted HttpOnly
+backend cookie and are passed to the Task Agent only over the internal A2A
+request.
+
 `SESSION_SECRET` is required by either sign-in app (any long random
 string; hashed into the 32-byte key used for JWE session encryption — use
 a *different* value per service, they don't share sessions).
@@ -513,8 +556,8 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   downstream as the *subject* token for this service's own further
   exchange.
 - `task-agent/app/graph.py` — MCP tools fetched once per task for schema
-  only through the configured AI gateway (`MCP_GATEWAY_URL`), using the
-  injected `MCP_GATEWAY_ACCESS_TOKEN`; the real work is in
+  only through the configured AI gateway (`MCP_GATEWAY_URL`), authenticated
+  with the user's separate AI Gateway OAuth session; the real work is in
   `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
   policy check, then this service's own Client Credentials (cached per
   task) + a **fresh, per-tool-call** Token Exchange scoped to exactly

@@ -109,17 +109,21 @@ def _mcp_connection(url: str, bearer_token: str | None = None) -> StreamableHttp
     return connection
 
 
-async def _get_mcp_tools(settings: Settings) -> list:
+async def _get_mcp_tools(settings: Settings, gateway_access_token: str | None) -> list:
     """Fetch MCP schemas through the AI gateway.
 
     The gateway requires a bearer for its protected-resource endpoint. This
-    credential is injected out of process/configuration and is only used for
+    credential is passed from the authenticated caller and is only used for
     discovery; it is not the per-tool delegated credential. A gateway
     rejection surfaces as a short message (the ExceptionGroup wrapping from
     the MCP streamable client makes the raw error unreadable), not a crash
     of the whole A2A task.
     """
-    connection = _mcp_connection(settings.mcp_gateway_url, settings.mcp_gateway_access_token)
+    if not gateway_access_token:
+        raise RuntimeError(
+            "Gateway authentication required: sign in to the AI Gateway before discovering todos tools."
+        )
+    connection = _mcp_connection(settings.mcp_gateway_url, gateway_access_token)
     client = MultiServerMCPClient({"todos": connection})
     try:
         return await client.get_tools()
@@ -545,8 +549,14 @@ def _tool_routing(state: AgentState) -> str:
     return "done" if content.startswith("CIBA_REQUIRED") else "continue"
 
 
-async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_budget: int | None = None) -> CompiledStateGraph:
-    tools = await _get_mcp_tools(settings)
+async def build_graph(
+    settings: Settings,
+    *,
+    actor_cache: dict[str, Any],
+    gateway_access_token: str | None,
+    judge_budget: int | None = None,
+) -> CompiledStateGraph:
+    tools = await _get_mcp_tools(settings, gateway_access_token)
 
     async def _wrap(request: ToolCallRequest, execute):
         return await _scoped_tool_call(settings, actor_cache, request)

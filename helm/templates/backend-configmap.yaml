@@ -11,6 +11,14 @@ data:
   OIDC_CLIENT_ID: {{ .Values.backend.env.OIDC_CLIENT_ID | quote }}
   OIDC_SCOPES: {{ .Values.backend.env.OIDC_SCOPES | quote }}
   OIDC_POST_LOGOUT_REDIRECT_URI: {{ .Values.backend.env.OIDC_POST_LOGOUT_REDIRECT_URI | quote }}
+  GATEWAY_ISSUER: {{ .Values.backend.env.GATEWAY_ISSUER | quote }}
+  GATEWAY_AUTHORIZATION_ENDPOINT: {{ .Values.backend.env.GATEWAY_AUTHORIZATION_ENDPOINT | quote }}
+  GATEWAY_TOKEN_ENDPOINT: {{ .Values.backend.env.GATEWAY_TOKEN_ENDPOINT | quote }}
+  GATEWAY_CLIENT_ID: {{ .Values.backend.env.GATEWAY_CLIENT_ID | quote }}
+  GATEWAY_CLIENT_AUTH_METHOD: {{ .Values.backend.env.GATEWAY_CLIENT_AUTH_METHOD | quote }}
+  GATEWAY_SCOPES: {{ .Values.backend.env.GATEWAY_SCOPES | quote }}
+  GATEWAY_REDIRECT_URI: {{ .Values.backend.env.GATEWAY_REDIRECT_URI | quote }}
+  GATEWAY_REFRESH_SKEW: {{ .Values.backend.env.GATEWAY_REFRESH_SKEW | quote }}
   AGENT_CLIENT_ID: {{ .Values.backend.env.AGENT_CLIENT_ID | quote }}
   AGENT_OWN_SCOPE: {{ .Values.backend.env.AGENT_OWN_SCOPE | quote }}
   AGENT_DELEGATION_CLIENT_ID: {{ .Values.backend.env.AGENT_DELEGATION_CLIENT_ID | quote }}

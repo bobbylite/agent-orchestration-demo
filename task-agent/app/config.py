@@ -141,13 +141,12 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = Field(default=None)
     langsmith_project: str = Field(default="Todos")
 
-    # The AI gateway is used for authenticated MCP schema discovery. Tool
-    # execution remains on the existing per-call, freshly authorized MCP
-    # connection until the gateway's downstream token contract is confirmed.
+    # The AI gateway is used for authenticated MCP schema discovery. The
+    # bearer is request-scoped and arrives over the internal A2A hop; it is
+    # never read from static service configuration.
     mcp_gateway_url: str = Field(
         default="https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp"
     )
-    mcp_gateway_access_token: str | None = Field(default=None)
 
     # Direct MCP endpoint retained for the existing per-tool authorization
     # path while gateway tool invocation is rolled out separately.

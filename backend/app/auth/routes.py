@@ -145,15 +145,22 @@ async def gateway_callback(
     saved = unseal_state(raw_state, settings) if raw_state else None
     if error or not code or not state or not saved or saved.get("state") != state or saved.get("sub") != (session or {}).get("sub"):
         return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
-    try:
-        tokens = await gateway_oidc.exchange_code(
-            settings,
-            code=code,
-            code_verifier=saved["verifier"],
-            redirect_uri=_gateway_redirect_uri(settings),
-        )
-    except (httpx.HTTPError, RuntimeError):
-        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    with with_span(
+        "gateway.login.callback",
+        {"gateway.auth_method": settings.gateway_client_auth_method},
+    ) as span:
+        try:
+            tokens = await gateway_oidc.exchange_code(
+                settings,
+                code=code,
+                code_verifier=saved["verifier"],
+                redirect_uri=_gateway_redirect_uri(settings),
+            )
+            span.set_attribute("gateway.outcome", "ok")
+        except (httpx.HTTPError, RuntimeError) as exc:
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
     if not tokens.get("access_token") or not session:
         return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
     response = RedirectResponse(settings.frontend_origin)

@@ -557,13 +557,17 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   downstream as the *subject* token for this service's own further
   exchange.
 - `task-agent/app/graph.py` — MCP tools are fetched and invoked through
-  `MCP_GATEWAY_URL`, authenticated with the user's separate AI Gateway OAuth
-  session. Every MCP request carries `Authorization: Bearer <gateway-token>`
-  plus `X-MCP-Downstream-Authorization: Bearer <todos-token>`; the gateway
+  `MCP_GATEWAY_URL`, authenticated with the user's separate PingOne Privilege
+  AI Gateway OAuth session. Every MCP request carries
+  `Authorization: Bearer <gateway-token>` plus
+  `X-MCP-Downstream-Authorization: Bearer <todos-token>`; the gateway
   promotes the sidecar token upstream. `_scoped_tool_call` performs policy
   checks, then this service's own Client Credentials (cached per task) plus a
   **fresh, per-tool-call** Token Exchange scoped to exactly `todos:read`,
-  `todos:write`, or `todos:delete`, preserving step-up scoping.
+  `todos:write`, or `todos:delete`, preserving step-up scoping. The caller
+  emits `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans for the
+  telemetry panel; the external gateway is not a local process with its own
+  ring buffer.
   The same file also builds the `judge` node — a `JudgeVerdict` Pydantic
   contract, on `ChatAnthropic` or `ChatGroq` depending on `JUDGE_PROVIDER`
   — that grades `task_assistant`'s proposed answer against the delegated

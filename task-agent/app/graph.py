@@ -7,11 +7,10 @@ Same two-node assistant<->tools loop shape as the Chat Agent
 LangGraph ReAct pattern, not something bespoke per agent.
 
 The tools bound to the LLM (and to ToolNode, for routing) are fetched once
-per task purely for their schemas. Schema discovery is sent through the
-AI gateway with its separately injected bearer; actual tool calls continue
-to use the existing freshly-authorized MCP connection until the gateway's
- downstream token contract is confirmed. The real work happens in
-`_scoped_tool_call` (wired in via ToolNode's
+per task purely for their schemas. Schema discovery and actual tool calls are
+sent through the AI gateway: discovery uses its bearer, while each real call
+also carries the freshly exchanged downstream token in the sidecar header.
+The real work happens in `_scoped_tool_call` (wired in via ToolNode's
 `awrap_tool_call` hook, same mechanism policy enforcement already used):
 per call, it performs this service's own Client Credentials (proving "the
 Task Agent" itself) and then a fresh RFC 8693 Token Exchange — subject =
@@ -49,6 +48,7 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field, SecretStr
 
 from app import policy
@@ -128,17 +128,32 @@ async def _get_mcp_tools(settings: Settings, gateway_access_token: str | None) -
         {"Authorization": f"Bearer {gateway_access_token}"},
     )
     client = MultiServerMCPClient({"todos": connection})
-    try:
-        return await client.get_tools()
-    except httpx.HTTPStatusError as exc:
-        raise _mcp_discovery_error(exc) from exc
-    except ExceptionGroup as exc:
-        nested = _find_http_status_error(exc)
-        if nested is not None:
-            raise _mcp_discovery_error(nested) from exc
-        raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
-    except Exception as exc:  # noqa: BLE001 — normalize to a readable failure, not a TaskGroup crash
-        raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
+    with with_span(
+        "gateway.mcp_discovery",
+        {"gateway.url": settings.mcp_gateway_url},
+    ) as span:
+        try:
+            tools = await client.get_tools()
+            span.set_attribute("gateway.outcome", "ok")
+            span.set_attribute("gateway.tool_count", len(tools))
+            return tools
+        except httpx.HTTPStatusError as exc:
+            span.set_attribute("gateway.outcome", "http_error")
+            span.set_attribute("gateway.http_status", exc.response.status_code)
+            raise _mcp_discovery_error(exc) from exc
+        except ExceptionGroup as exc:
+            nested = _find_http_status_error(exc)
+            if nested is not None:
+                span.set_attribute("gateway.outcome", "http_error")
+                span.set_attribute("gateway.http_status", nested.response.status_code)
+                raise _mcp_discovery_error(nested) from exc
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — normalize to a readable failure, not a TaskGroup crash
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
 
 
 def _find_http_status_error(exc: BaseException) -> httpx.HTTPStatusError | None:
@@ -312,16 +327,29 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         )
         return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
 
-    try:
-        tool = await _get_mcp_tool(
-            settings,
-            tool_name,
-            gateway_access_token,
-            mcp_token,
-        )
-        result = await tool.ainvoke(request.tool_call["args"])
-    except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
-        return ToolMessage(content=f"The todos service call failed: {exc}", tool_call_id=request.tool_call["id"])
+    with with_span(
+        "gateway.mcp_tool_call",
+        {
+            "gateway.url": settings.mcp_gateway_url,
+            "mcp.tool": tool_name,
+        },
+    ) as span:
+        try:
+            tool = await _get_mcp_tool(
+                settings,
+                tool_name,
+                gateway_access_token,
+                mcp_token,
+            )
+            result = await tool.ainvoke(request.tool_call["args"])
+            span.set_attribute("gateway.outcome", "ok")
+            span.set_attribute("mcp.outcome", "authorized")
+        except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            return ToolMessage(content=f"The todos service call failed: {exc}", tool_call_id=request.tool_call["id"])
 
     return ToolMessage(content=str(result), tool_call_id=request.tool_call["id"])
 

@@ -24,6 +24,7 @@ const KIND_STYLES: Record<StoryNodeData["kind"], { accent: string; icon: ReactEl
   // Same muted tone as "browser" — Claude Desktop is the same signed-in
   // human, just a second front door, not a new trust tier.
   desktop: { accent: "var(--ink-muted)", icon: <DesktopIcon /> },
+  gateway: { accent: "var(--warning)", icon: <GatewayIcon /> },
 }
 
 interface Props extends NodeProps {
@@ -160,6 +161,14 @@ function DesktopIcon() {
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="1.5" y="2.5" width="13" height="8.5" rx="1.2" stroke="currentColor" strokeWidth="1.3" />
       <path d="M5.5 14h5M8 11v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+function GatewayIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="M5 2v12M11 2v12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   )
 }

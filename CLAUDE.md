@@ -923,11 +923,14 @@ has these settings at all).
   it's now a two-service match, not three. `task-agent/app/graph.py`
   requests one of these via its own Token Exchange per tool call, and
   `mcp-todos-server/app/policy.py` checks the resulting token's `scope`
-  claim against its own copy. Schema discovery uses the gateway endpoint
+  claim against its own copy. Schema discovery and actual tool calls use the gateway endpoint
   configured by `MCP_GATEWAY_URL` and authenticated with the user's
-  request-scoped gateway OAuth credential forwarded over A2A; tool-call
-  gateway routing remains a separate rollout until the gateway's downstream
-  token contract is confirmed.
+  request-scoped gateway OAuth credential forwarded over A2A. Actual calls
+  carry the fresh todos-scoped token in
+  `X-MCP-Downstream-Authorization`, while `Authorization` remains the
+  gateway credential. The Task Agent emits caller-side
+  `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans; the external
+  gateway is not a local process and has no ring buffer of its own.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*

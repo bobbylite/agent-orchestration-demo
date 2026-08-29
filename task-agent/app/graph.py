@@ -51,7 +51,7 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field, SecretStr
 
-from app import policy
+from app import gateway_audit, policy
 from app.config import Settings
 from app.telemetry import with_span
 from app import token_ledger
@@ -134,23 +134,68 @@ async def _get_mcp_tools(settings: Settings, gateway_access_token: str | None) -
     ) as span:
         try:
             tools = await client.get_tools()
+            gateway_audit.record_tools(tools, gateway_url=settings.mcp_gateway_url)
+            gateway_audit.record_activity(
+                operation="schema_discovery",
+                outcome="ok",
+                gateway_url=settings.mcp_gateway_url,
+                tool_count=len(tools),
+            )
             span.set_attribute("gateway.outcome", "ok")
             span.set_attribute("gateway.tool_count", len(tools))
             return tools
         except httpx.HTTPStatusError as exc:
+            gateway_audit.record_discovery_failure(
+                outcome="policy_denied" if exc.response.status_code in {401, 403} else "error",
+                gateway_url=settings.mcp_gateway_url,
+                reason="gateway_policy_denied" if exc.response.status_code == 403 else "gateway_http_error",
+                http_status=exc.response.status_code,
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery",
+                outcome="policy_denied" if exc.response.status_code in {401, 403} else "error",
+                gateway_url=settings.mcp_gateway_url,
+                reason="gateway_policy_denied" if exc.response.status_code == 403 else "gateway_http_error",
+                http_status=exc.response.status_code,
+            )
             span.set_attribute("gateway.outcome", "http_error")
             span.set_attribute("gateway.http_status", exc.response.status_code)
             raise _mcp_discovery_error(exc) from exc
         except ExceptionGroup as exc:
             nested = _find_http_status_error(exc)
             if nested is not None:
+                outcome = "policy_denied" if nested.response.status_code in {401, 403} else "error"
+                gateway_audit.record_discovery_failure(
+                    outcome=outcome,
+                    gateway_url=settings.mcp_gateway_url,
+                    reason="gateway_policy_denied" if nested.response.status_code == 403 else "gateway_http_error",
+                    http_status=nested.response.status_code,
+                )
+                gateway_audit.record_activity(
+                    operation="schema_discovery", outcome=outcome,
+                    gateway_url=settings.mcp_gateway_url,
+                    reason="gateway_policy_denied" if nested.response.status_code == 403 else "gateway_http_error",
+                    http_status=nested.response.status_code,
+                )
                 span.set_attribute("gateway.outcome", "http_error")
                 span.set_attribute("gateway.http_status", nested.response.status_code)
                 raise _mcp_discovery_error(nested) from exc
+            gateway_audit.record_discovery_failure(
+                outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery", outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
             span.set_attribute("gateway.outcome", "error")
             span.set_attribute("gateway.failure_type", type(exc).__name__)
             raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
         except Exception as exc:  # noqa: BLE001 — normalize to a readable failure, not a TaskGroup crash
+            gateway_audit.record_discovery_failure(
+                outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery", outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
             span.set_attribute("gateway.outcome", "error")
             span.set_attribute("gateway.failure_type", type(exc).__name__)
             raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
@@ -342,9 +387,23 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
                 mcp_token,
             )
             result = await tool.ainvoke(request.tool_call["args"])
+            gateway_audit.record_activity(
+                operation="tool_call",
+                outcome="ok",
+                gateway_url=settings.mcp_gateway_url,
+                tool=tool_name,
+            )
             span.set_attribute("gateway.outcome", "ok")
             span.set_attribute("mcp.outcome", "authorized")
         except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
+            gateway_audit.record_activity(
+                operation="tool_call",
+                outcome="policy_denied" if isinstance(exc, (httpx.HTTPStatusError,)) and exc.response.status_code == 403 else "error",
+                gateway_url=settings.mcp_gateway_url,
+                tool=tool_name,
+                http_status=exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                reason="gateway_policy_denied" if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403 else type(exc).__name__,
+            )
             span.set_attribute("gateway.outcome", "error")
             span.set_attribute("gateway.failure_type", type(exc).__name__)
             span.record_exception(exc)

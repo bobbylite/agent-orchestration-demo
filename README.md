@@ -567,7 +567,10 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   `todos:write`, or `todos:delete`, preserving step-up scoping. The caller
   emits `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans for the
   telemetry panel; the external gateway is not a local process with its own
-  ring buffer.
+  ring buffer. The console's **AI Gateway** inspector reads the Task Agent's
+  bounded `/gateway/insights` endpoint to show real discovered tools and
+  gateway outcomes; it is diagnostic/in-memory only, never an authorization
+  source of truth.
   The same file also builds the `judge` node — a `JudgeVerdict` Pydantic
   contract, on `ChatAnthropic` or `ChatGroq` depending on `JUDGE_PROVIDER`
   — that grades `task_assistant`'s proposed answer against the delegated

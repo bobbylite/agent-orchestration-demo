@@ -930,7 +930,10 @@ has these settings at all).
   `X-MCP-Downstream-Authorization`, while `Authorization` remains the
   gateway credential. The Task Agent emits caller-side
   `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans; the external
-  gateway is not a local process and has no ring buffer of its own.
+  gateway is not a local process and has no ring buffer of its own. The
+  frontend's AI Gateway inspector reads the Task Agent's bounded
+  `/gateway/insights` diagnostic surface for real discovered tools and safe
+  policy outcomes; it is never an authorization source of truth.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*

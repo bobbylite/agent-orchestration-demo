@@ -83,6 +83,29 @@ class Settings(BaseSettings):
     # Session cookie encryption (JWE, A256GCM needs a 32-byte key)
     session_secret: str | None = Field(default=None)
 
+    # AI Gateway OAuth — a separate user authorization-code + PKCE session.
+    # This does not replace the PingOne login above: the PingOne token still
+    # drives the Chat Agent -> Task Agent delegation chain.
+    gateway_issuer: str | None = Field(default=None)
+    gateway_authorization_endpoint: str | None = Field(default=None)
+    gateway_token_endpoint: str | None = Field(default=None)
+    gateway_client_id: str | None = Field(default=None)
+    gateway_client_secret: str | None = Field(default=None)
+    gateway_client_auth_method: str = Field(default="none")
+    gateway_scopes: str = Field(default="openid profile email")
+    gateway_redirect_uri: str | None = Field(default=None)
+    gateway_refresh_skew: int = Field(default=60)
+
+    @property
+    def gateway_configured(self) -> bool:
+        return bool(
+            self.gateway_issuer
+            and self.gateway_authorization_endpoint
+            and self.gateway_token_endpoint
+            and self.gateway_client_id
+            and self.session_secret
+        )
+
     # LangGraph agent — which LLM provider the `assistant` node itself
     # runs on (nothing to do with agent *identity*/delegation above, which
     # is always PingOne regardless of this setting). "anthropic" (default),

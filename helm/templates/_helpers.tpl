@@ -95,22 +95,3 @@ Resolved PUBLIC_URL for the task-agent.
 {{- printf "http://%s:%d" (include "agentorchestration.taskAgentSvcName" .) (.Values.taskAgent.service.port | int) -}}
 {{- end -}}
 {{- end }}
-
-{{/*
-Resolved MCP_TODOS_URL for the task-agent.
-*/}}
-{{- define "agentorchestration.mcpTodosUrl" -}}
-{{- if .Values.taskAgent.env.MCP_TODOS_URL -}}
-{{- .Values.taskAgent.env.MCP_TODOS_URL -}}
-{{- else -}}
-{{- printf "http://%s:%d/mcp" (include "agentorchestration.mcpTodosSvcName" .) (.Values.mcpTodosServer.service.port | int) -}}
-{{- end -}}
-{{- end }}
-
-{{- define "agentorchestration.mcpTodosAudience" -}}
-{{- if .Values.taskAgent.env.MCP_TODOS_AUDIENCE -}}
-{{- .Values.taskAgent.env.MCP_TODOS_AUDIENCE -}}
-{{- else -}}
-{{- printf "http://%s:%d/mcp" (include "agentorchestration.mcpTodosSvcName" .) (.Values.mcpTodosServer.service.port | int) -}}
-{{- end -}}
-{{- end }}

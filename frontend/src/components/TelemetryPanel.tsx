@@ -13,6 +13,9 @@ const TokenChainPanel = lazy(() =>
 const AuthorizeDecisionsPanel = lazy(() =>
   import("./AuthorizeDecisionsPanel").then((m) => ({ default: m.AuthorizeDecisionsPanel })),
 )
+const AiGatewayPanel = lazy(() =>
+  import("./AiGatewayPanel").then((m) => ({ default: m.AiGatewayPanel })),
+)
 
 const POLL_INTERVAL_MS = 2000
 
@@ -24,6 +27,7 @@ export function TelemetryPanel() {
   const [diagramOpen, setDiagramOpen] = useState(false)
   const [tokensOpen, setTokensOpen] = useState(false)
   const [authorizeOpen, setAuthorizeOpen] = useState(false)
+  const [aiGatewayOpen, setAiGatewayOpen] = useState(false)
   const [clearing, setClearing] = useState(false)
   const pollGeneration = useRef(0)
 
@@ -59,7 +63,7 @@ export function TelemetryPanel() {
             {spans.length}
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <button
             type="button"
             disabled={clearing}
@@ -94,14 +98,24 @@ export function TelemetryPanel() {
             <TokensIcon />
             Tokens
           </button>
-          <button
-            type="button"
-            onClick={() => setAuthorizeOpen(true)}
-            className="flex items-center gap-1.5 rounded-md border border-brand/30 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-brand transition hover:bg-brand/10"
-          >
-            <AuthorizeIcon />
-            Decisions
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAuthorizeOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-warning/40 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-warning transition hover:bg-warning/10"
+            >
+              <AuthorizeIcon />
+              Decisions
+            </button>
+            <button
+              type="button"
+              onClick={() => setAiGatewayOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-warning/40 bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-warning transition hover:bg-warning/10"
+            >
+              <GatewayIcon />
+              AI Gateway
+            </button>
+          </div>
         </div>
       </div>
 
@@ -118,6 +132,11 @@ export function TelemetryPanel() {
       {authorizeOpen && (
         <Suspense fallback={<DiagramLoadingOverlay />}>
           <AuthorizeDecisionsPanel onClose={() => setAuthorizeOpen(false)} />
+        </Suspense>
+      )}
+      {aiGatewayOpen && (
+        <Suspense fallback={<DiagramLoadingOverlay />}>
+          <AiGatewayPanel onClose={() => setAiGatewayOpen(false)} />
         </Suspense>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -209,6 +228,14 @@ function DiagramIcon() {
       <rect x="10.5" y="2" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <rect x="5.75" y="9.5" width="4.5" height="4.5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       <path d="M3.25 6.5V8a1 1 0 0 0 1 1H8m4.75-2.5V8a1 1 0 0 1-1 1H8m0 0v.5" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
+
+function GatewayIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 4h12M2 8h12M2 12h12M5 2v12M11 2v12" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   )
 }

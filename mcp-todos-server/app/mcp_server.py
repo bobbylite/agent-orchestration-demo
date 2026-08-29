@@ -29,13 +29,26 @@ from app.config import get_settings
 mcp = FastMCP("Todos")
 
 
+def _downstream_bearer_token() -> str:
+    """Read the MCP caller token, not the gateway's outer bearer.
+
+    The gateway's Authorization header authenticates the gateway request. The
+    token that this resource verifies is carried in the dedicated downstream
+    header so its audience and todos scope remain intact.
+    """
+    request = get_http_request()
+    header = request.headers.get("x-mcp-downstream-authorization", "").strip()
+    if not header:
+        raise InboundAuthError("missing_downstream_bearer_token")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise InboundAuthError("invalid_downstream_bearer_token")
+    return token.strip()
+
+
 async def _verify_caller() -> VerifiedIdentity:
     settings = get_settings()
-    request = get_http_request()
-    auth_header = request.headers.get("authorization", "")
-    token = auth_header.removeprefix("Bearer ").strip()
-    if not token:
-        raise InboundAuthError("missing_bearer_token")
+    token = _downstream_bearer_token()
     return await verify_bearer_token(
         token,
         discovery_url=settings.oidc_discovery_url or "",
@@ -71,7 +84,7 @@ async def _authorize(tool_name: str) -> VerifiedIdentity:
     try:
         caller = await _verify_caller()
     except InboundAuthError as exc:
-        raise ToolError(f"Inbound auth rejected the token: {exc.reason}") from exc
+        raise ToolError(f"Inbound auth rejected the downstream token: {exc.reason}") from exc
 
     if not policy.check(tool_name, caller.agent_client_id, caller.scope):
         detail = (
@@ -82,7 +95,7 @@ async def _authorize(tool_name: str) -> VerifiedIdentity:
 
     with with_span("authorize.mcp_tool_call", {"policy.tool": tool_name}) as span:
         permitted, reason = await authorize.check_tool_call(
-            get_settings(), access_token=(get_http_request().headers.get("authorization", "").removeprefix("Bearer ").strip()), tool_name=tool_name
+            get_settings(), access_token=_downstream_bearer_token(), tool_name=tool_name
         )
         span.set_attribute("policy.result", "permit" if permitted else "deny")
         if not permitted:

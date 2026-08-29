@@ -15,6 +15,9 @@ export interface MeResponse {
    * Agent this session (Client Credentials + RFC 8693 Token Exchange) — one
    * generic credential, not one per action; see CLAUDE.md 2026-08-16. */
   agent_delegated: boolean
+  gateway_enabled: boolean
+  gateway_authenticated: boolean
+  gateway_auth_required: boolean
 }
 
 export interface TokenLedgerEntry {
@@ -38,6 +41,34 @@ export interface TaskAgentTokenChainResponse {
   mcp_scoped_read: TokenLedgerEntry | null
   mcp_scoped_write: TokenLedgerEntry | null
   mcp_scoped_delete: TokenLedgerEntry | null
+}
+
+export interface GatewayTool {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+  discovered_at: string
+}
+
+export interface GatewayActivity {
+  id: string
+  timestamp: string
+  operation: "schema_discovery" | "tool_call"
+  outcome: "ok" | "policy_denied" | "error"
+  gateway_url: string
+  tool: string | null
+  http_status: number | null
+  reason: string | null
+  tool_count: number | null
+}
+
+export interface GatewayInsights {
+  gateway_url: string
+  tools: GatewayTool[]
+  activities: GatewayActivity[]
+  last_discovery: { timestamp: string; outcome: string; tool_count?: number; reason?: string } | null
+  last_call: GatewayActivity | null
+  summary: { available_tools: number; calls: number; denied: number; errors: number }
 }
 
 export interface AuthorizeDecisionEntry {
@@ -111,7 +142,10 @@ export const api = {
   getAuthorizeDecisions: () => getJson<{ entries: AuthorizeDecisionEntry[] }>("/task-agent-api/authorize/decisions"),
   clearAuthorizeDecisions: () =>
     getJson<{ cleared: number }>("/task-agent-api/authorize/decisions", { method: "DELETE" }),
+  getGatewayInsights: () => getJson<GatewayInsights>("/task-agent-api/gateway/insights"),
+  clearGatewayInsights: () => getJson<{ cleared: number }>("/task-agent-api/gateway/insights", { method: "DELETE" }),
   loginUrl: "/api/auth/login",
+  gatewayLoginUrl: "/api/auth/gateway/login",
   logoutUrl: "/api/auth/logout",
 }
 

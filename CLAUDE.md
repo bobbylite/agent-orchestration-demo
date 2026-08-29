@@ -183,9 +183,10 @@ into the tool-execution hook (see "RFC 8693 chained delegation" below):
 - `task_assistant` — its own Claude call, reasons about which MCP tool to
   invoke (`list_todos`/`add_todo`/`complete_todo`). Tools are fetched from
   `mcp-todos-server/` via `langchain_mcp_adapters.MultiServerMCPClient`
-  once per task **purely for their schemas** (`tools/list` needs no auth)
-  — bound to the LLM the same way as the Chat Agent's tools, but never
-  actually invoked through that connection.
+  once per task **purely for their schemas**, through the configured AI
+  gateway URL with its injected discovery bearer — bound to the LLM the same
+  way as the Chat Agent's tools, but never actually invoked through that
+  connection.
 - `execute_tool` — a `ToolNode` whose `awrap_tool_call` hook
   (`_scoped_tool_call`) does full custom dispatch, not just a gate: policy
   check, then this service's own delegation chain (Client Credentials +
@@ -695,10 +696,15 @@ not a bug.
 
 **mcp-todos-server now receives a token task-agent minted itself, not one
 forwarded unchanged.** Superseded by the 2026-08-16 redesign above:
-`task-agent/app/graph.py`'s MCP tools are fetched once per task purely for
-schemas (no auth needed for `tools/list`); the actual, freshly-authorized
-connection is built per tool call inside `_scoped_tool_call`, using a
-token from task-agent's *own* RFC 8693 exchange (step 4 in the chain
+`task-agent/app/graph.py`'s MCP tools are fetched and invoked through the
+configured AI gateway using the request-scoped gateway bearer in
+`Authorization` and the fresh todos-scoped bearer in
+`X-MCP-Downstream-Authorization`; the gateway preserves the sidecar header
+upstream, and mcp-todos-server verifies that token rather than the gateway
+bearer. The request-scoped gateway token is forwarded over the internal A2A
+hop; the freshly-authorized connection is built per tool call inside
+`_scoped_tool_call`, using a token
+from task-agent's *own* RFC 8693 exchange (step 4 in the chain
 above) — not a header carried over from the Chat Agent. `mcp-todos-server`
 still independently re-verifies whatever it receives, same as always;
 what changed is *whose* exchange produced it.
@@ -917,7 +923,17 @@ has these settings at all).
   it's now a two-service match, not three. `task-agent/app/graph.py`
   requests one of these via its own Token Exchange per tool call, and
   `mcp-todos-server/app/policy.py` checks the resulting token's `scope`
-  claim against its own copy.
+  claim against its own copy. Schema discovery and actual tool calls use the gateway endpoint
+  configured by `MCP_GATEWAY_URL` and authenticated with the user's
+  request-scoped gateway OAuth credential forwarded over A2A. Actual calls
+  carry the fresh todos-scoped token in
+  `X-MCP-Downstream-Authorization`, while `Authorization` remains the
+  gateway credential. The Task Agent emits caller-side
+  `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans; the external
+  gateway is not a local process and has no ring buffer of its own. The
+  frontend's AI Gateway inspector reads the Task Agent's bounded
+  `/gateway/insights` diagnostic surface for real discovered tools and safe
+  policy outcomes; it is never an authorization source of truth.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*
@@ -933,8 +949,10 @@ has these settings at all).
   inside a bigger FastAPI app (`mcp-todos-server/app/main.py`) — otherwise
   the streamable-http session manager never starts and every MCP call
   hangs/fails. `get_http_request()` (from `fastmcp.server.dependencies`)
-  is how an `@mcp.tool` function reads the raw `Authorization` header
-  without needing an explicit `ctx: Context` parameter.
+  is how an `@mcp.tool` function reads the raw
+  `X-MCP-Downstream-Authorization` header without needing an explicit
+  `ctx: Context` parameter. The outer `Authorization` header belongs to the
+  AI Gateway; human UI routes remain session-cookie authenticated.
 - **`[project.scripts]` entry points don't get installed when
   `[tool.uv].package = false`** (every service in this repo sets that,
   including `claude-bridge/`) — there's no build/install step to place the

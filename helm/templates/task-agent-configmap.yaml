@@ -10,7 +10,7 @@ data:
   EXPECTED_DELEGATION_SCOPE: {{ .Values.taskAgent.env.EXPECTED_DELEGATION_SCOPE | quote }}
   ALLOWED_AGENT_CLIENT_ID: {{ .Values.taskAgent.env.ALLOWED_AGENT_CLIENT_ID | quote }}
   AGENT_TASK_SCOPE: {{ .Values.taskAgent.env.AGENT_TASK_SCOPE | quote }}
-  MCP_TODOS_AUDIENCE: {{ include "agentorchestration.mcpTodosAudience" . | quote }}
+  MCP_GATEWAY_URL: {{ .Values.taskAgent.env.MCP_GATEWAY_URL | quote }}
   TODOS_READ_SCOPE: {{ .Values.taskAgent.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.taskAgent.env.TODOS_WRITE_SCOPE | quote }}
   TODOS_DELETE_SCOPE: {{ .Values.taskAgent.env.TODOS_DELETE_SCOPE | quote }}
@@ -38,7 +38,6 @@ data:
   LANGSMITH_TRACING: {{ .Values.taskAgent.env.LANGSMITH_TRACING | quote }}
   LANGSMITH_ENDPOINT: {{ .Values.taskAgent.env.LANGSMITH_ENDPOINT | quote }}
   LANGSMITH_PROJECT: {{ .Values.taskAgent.env.LANGSMITH_PROJECT | quote }}
-  MCP_TODOS_URL: {{ include "agentorchestration.mcpTodosUrl" . | quote }}
   HOST: {{ .Values.taskAgent.env.HOST | quote }}
   PORT: {{ .Values.taskAgent.env.PORT | quote }}
   PUBLIC_URL: {{ include "agentorchestration.taskAgentPublicUrl" . | quote }}

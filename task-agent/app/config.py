@@ -141,7 +141,12 @@ class Settings(BaseSettings):
     langsmith_api_key: str | None = Field(default=None)
     langsmith_project: str = Field(default="Todos")
 
-    mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
+    # The AI gateway is used for authenticated MCP schema discovery. The
+    # bearer is request-scoped and arrives over the internal A2A hop; it is
+    # never read from static service configuration.
+    mcp_gateway_url: str = Field(
+        default="https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp"
+    )
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=9010)

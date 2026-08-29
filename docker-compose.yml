@@ -30,7 +30,7 @@ services:
       - path: ./task-agent/.env
         required: false
     environment:
-      MCP_TODOS_URL: http://mcp-todos-server:9000/mcp
+      MCP_GATEWAY_URL: https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp
       PUBLIC_URL: http://task-agent:9010
     expose:
       - "9010"

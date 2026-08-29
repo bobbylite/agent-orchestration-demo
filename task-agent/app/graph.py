@@ -7,8 +7,9 @@ Same two-node assistant<->tools loop shape as the Chat Agent
 LangGraph ReAct pattern, not something bespoke per agent.
 
 The tools bound to the LLM (and to ToolNode, for routing) are fetched once
-per task purely for their schemas — mcp-todos-server's tools/list doesn't
-require auth, only actual tool *calls* do (see mcp-todos-server/app/mcp_server.py).
+per task purely for their schemas. Schema discovery and actual tool calls are
+sent through the AI gateway: discovery uses its bearer, while each real call
+also carries the freshly exchanged downstream token in the sidecar header.
 The real work happens in `_scoped_tool_call` (wired in via ToolNode's
 `awrap_tool_call` hook, same mechanism policy enforcement already used):
 per call, it performs this service's own Client Credentials (proving "the
@@ -47,9 +48,10 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field, SecretStr
 
-from app import policy
+from app import gateway_audit, policy
 from app.config import Settings
 from app.telemetry import with_span
 from app import token_ledger
@@ -99,21 +101,154 @@ def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
         return exc.response.text or str(exc)
 
 
-async def _get_mcp_tools(settings: Settings) -> list:
-    """Schema only — no Authorization header. tools/list doesn't require
-    one; actual invocation (_scoped_tool_call, below) always builds its own
-    freshly-authorized connection instead of reusing these tool objects."""
-    connection: StreamableHttpConnection = {"transport": "streamable_http", "url": settings.mcp_todos_url}
+def _mcp_connection(url: str, headers: dict[str, str] | None = None) -> StreamableHttpConnection:
+    """Build one Streamable HTTP connection shape for an MCP endpoint."""
+    connection: StreamableHttpConnection = {"transport": "streamable_http", "url": url}
+    if headers:
+        connection["headers"] = headers
+    return connection
+
+
+async def _get_mcp_tools(settings: Settings, gateway_access_token: str | None) -> list:
+    """Fetch MCP schemas through the AI gateway.
+
+    The gateway requires a bearer for its protected-resource endpoint. This
+    credential is passed from the authenticated caller and is only used for
+    discovery; it is not the per-tool delegated credential. A gateway
+    rejection surfaces as a short message (the ExceptionGroup wrapping from
+    the MCP streamable client makes the raw error unreadable), not a crash
+    of the whole A2A task.
+    """
+    if not gateway_access_token:
+        raise RuntimeError(
+            "Gateway authentication required: sign in to the AI Gateway before discovering todos tools."
+        )
+    connection = _mcp_connection(
+        settings.mcp_gateway_url,
+        {"Authorization": f"Bearer {gateway_access_token}"},
+    )
     client = MultiServerMCPClient({"todos": connection})
-    return await client.get_tools()
+    with with_span(
+        "gateway.mcp_discovery",
+        {"gateway.url": settings.mcp_gateway_url},
+    ) as span:
+        try:
+            tools = await client.get_tools()
+            gateway_audit.record_tools(tools, gateway_url=settings.mcp_gateway_url)
+            gateway_audit.record_activity(
+                operation="schema_discovery",
+                outcome="ok",
+                gateway_url=settings.mcp_gateway_url,
+                tool_count=len(tools),
+            )
+            span.set_attribute("gateway.outcome", "ok")
+            span.set_attribute("gateway.tool_count", len(tools))
+            return tools
+        except httpx.HTTPStatusError as exc:
+            gateway_audit.record_discovery_failure(
+                outcome="policy_denied" if exc.response.status_code in {401, 403} else "error",
+                gateway_url=settings.mcp_gateway_url,
+                reason="gateway_policy_denied" if exc.response.status_code == 403 else "gateway_http_error",
+                http_status=exc.response.status_code,
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery",
+                outcome="policy_denied" if exc.response.status_code in {401, 403} else "error",
+                gateway_url=settings.mcp_gateway_url,
+                reason="gateway_policy_denied" if exc.response.status_code == 403 else "gateway_http_error",
+                http_status=exc.response.status_code,
+            )
+            span.set_attribute("gateway.outcome", "http_error")
+            span.set_attribute("gateway.http_status", exc.response.status_code)
+            raise _mcp_discovery_error(exc) from exc
+        except ExceptionGroup as exc:
+            nested = _find_http_status_error(exc)
+            if nested is not None:
+                outcome = "policy_denied" if nested.response.status_code in {401, 403} else "error"
+                gateway_audit.record_discovery_failure(
+                    outcome=outcome,
+                    gateway_url=settings.mcp_gateway_url,
+                    reason="gateway_policy_denied" if nested.response.status_code == 403 else "gateway_http_error",
+                    http_status=nested.response.status_code,
+                )
+                gateway_audit.record_activity(
+                    operation="schema_discovery", outcome=outcome,
+                    gateway_url=settings.mcp_gateway_url,
+                    reason="gateway_policy_denied" if nested.response.status_code == 403 else "gateway_http_error",
+                    http_status=nested.response.status_code,
+                )
+                span.set_attribute("gateway.outcome", "http_error")
+                span.set_attribute("gateway.http_status", nested.response.status_code)
+                raise _mcp_discovery_error(nested) from exc
+            gateway_audit.record_discovery_failure(
+                outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery", outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 — normalize to a readable failure, not a TaskGroup crash
+            gateway_audit.record_discovery_failure(
+                outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            gateway_audit.record_activity(
+                operation="schema_discovery", outcome="error", gateway_url=settings.mcp_gateway_url, reason=type(exc).__name__
+            )
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            raise RuntimeError(f"MCP gateway tool discovery failed: {exc}") from exc
 
 
-async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):
-    connection: StreamableHttpConnection = {
-        "transport": "streamable_http",
-        "url": settings.mcp_todos_url,
-        "headers": {"Authorization": f"Bearer {bearer_token}"},
-    }
+def _find_http_status_error(exc: BaseException) -> httpx.HTTPStatusError | None:
+    """Find the HTTP failure hidden inside an AnyIO ExceptionGroup."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc
+    if isinstance(exc, BaseExceptionGroup):
+        for nested in exc.exceptions:
+            match = _find_http_status_error(nested)
+            if match is not None:
+                return match
+    return None
+
+
+def _mcp_discovery_error(exc: httpx.HTTPStatusError) -> RuntimeError:
+    status_code = exc.response.status_code
+    detail = _pingone_error_detail(exc)
+    if status_code == 403:
+        return RuntimeError(
+            "Forbidden request: the AI Gateway's access policy does not permit this client "
+            "to discover or use the todos tools. An administrator must grant this client's "
+            "gateway policy access to the requested MCP tool, or issue the client a token "
+            "from an authorized gateway session (HTTP 403)."
+            f" {_detail_suffix(detail)}"
+        )
+    return RuntimeError(
+        "Unauthorized request: the MCP gateway did not accept the discovery credential. "
+        "A fresh gateway-issued access token is required (HTTP "
+        f"{status_code}). {_detail_suffix(detail)}"
+    )
+
+
+def _detail_suffix(detail: str) -> str:
+    cleaned = (detail or "").strip()
+    return f"({cleaned})" if cleaned else ""
+
+
+async def _get_mcp_tool(
+    settings: Settings,
+    tool_name: str,
+    gateway_access_token: str,
+    downstream_access_token: str,
+):
+    connection = _mcp_connection(
+        settings.mcp_gateway_url,
+        {
+            "Authorization": f"Bearer {gateway_access_token}",
+            "X-MCP-Downstream-Authorization": f"Bearer {downstream_access_token}",
+        },
+    )
     client = MultiServerMCPClient({"todos": connection})
     for tool in await client.get_tools():
         if tool.name == tool_name:
@@ -168,9 +303,15 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
     ciba_tokens = configurable.get("ciba_tokens", {})
+    gateway_access_token = configurable.get("gateway_access_token")
     capability_entry = _TOOL_CAPABILITY.get(tool_name)
     if not capability_entry or not delegation_token:
         return ToolMessage(content=f"Cannot call '{tool_name}': unsupported tool or missing delegation.", tool_call_id=request.tool_call["id"])
+    if not gateway_access_token:
+        return ToolMessage(
+            content="Gateway authentication required: the MCP gateway credential was not forwarded.",
+            tool_call_id=request.tool_call["id"],
+        )
     capability, scope_setting = capability_entry
     required_scope = getattr(settings, scope_setting)
     ciba_token = ciba_tokens.get(capability) if isinstance(ciba_tokens, dict) else None
@@ -231,11 +372,43 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         )
         return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
 
-    try:
-        tool = await _get_mcp_tool(settings, tool_name, mcp_token)
-        result = await tool.ainvoke(request.tool_call["args"])
-    except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
-        return ToolMessage(content=f"The todos service call failed: {exc}", tool_call_id=request.tool_call["id"])
+    with with_span(
+        "gateway.mcp_tool_call",
+        {
+            "gateway.url": settings.mcp_gateway_url,
+            "mcp.tool": tool_name,
+        },
+    ) as span:
+        try:
+            tool = await _get_mcp_tool(
+                settings,
+                tool_name,
+                gateway_access_token,
+                mcp_token,
+            )
+            result = await tool.ainvoke(request.tool_call["args"])
+            gateway_audit.record_activity(
+                operation="tool_call",
+                outcome="ok",
+                gateway_url=settings.mcp_gateway_url,
+                tool=tool_name,
+            )
+            span.set_attribute("gateway.outcome", "ok")
+            span.set_attribute("mcp.outcome", "authorized")
+        except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
+            gateway_audit.record_activity(
+                operation="tool_call",
+                outcome="policy_denied" if isinstance(exc, (httpx.HTTPStatusError,)) and exc.response.status_code == 403 else "error",
+                gateway_url=settings.mcp_gateway_url,
+                tool=tool_name,
+                http_status=exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None,
+                reason="gateway_policy_denied" if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403 else type(exc).__name__,
+            )
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            return ToolMessage(content=f"The todos service call failed: {exc}", tool_call_id=request.tool_call["id"])
 
     return ToolMessage(content=str(result), tool_call_id=request.tool_call["id"])
 
@@ -488,8 +661,14 @@ def _tool_routing(state: AgentState) -> str:
     return "done" if content.startswith("CIBA_REQUIRED") else "continue"
 
 
-async def build_graph(settings: Settings, *, actor_cache: dict[str, Any], judge_budget: int | None = None) -> CompiledStateGraph:
-    tools = await _get_mcp_tools(settings)
+async def build_graph(
+    settings: Settings,
+    *,
+    actor_cache: dict[str, Any],
+    gateway_access_token: str | None,
+    judge_budget: int | None = None,
+) -> CompiledStateGraph:
+    tools = await _get_mcp_tools(settings, gateway_access_token)
 
     async def _wrap(request: ToolCallRequest, execute):
         return await _scoped_tool_call(settings, actor_cache, request)

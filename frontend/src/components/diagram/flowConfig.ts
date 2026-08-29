@@ -1,6 +1,6 @@
 import type { TelemetrySpan } from "../../lib/api"
 
-export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge" | "desktop"
+export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge" | "desktop" | "gateway"
 
 /** OTel resource `service.name` values — see backend/app/telemetry.py and
  * task-agent/app/telemetry.py's RecordingSpanProcessor, which both stamp
@@ -59,7 +59,7 @@ export const STORY_NODES: Array<{
       title: "PingOne",
       subtitle: "OIDC Identity Provider — the one thing both front doors trust",
       kind: "idp",
-      spanNames: ["oidc.login.redirect", "oidc.login.callback", "agent.client_credentials", "agent.token_exchange"],
+      spanNames: ["oidc.login.redirect", "oidc.login.callback", "gateway.login.callback", "agent.client_credentials", "agent.token_exchange"],
       service: SERVICE_CHAT_AGENT,
     },
   },
@@ -101,8 +101,19 @@ export const STORY_NODES: Array<{
     },
   },
   {
-    id: "mcp",
+    id: "gateway",
     position: { x: 1260, y: 300 },
+    data: {
+      title: "AI Gateway",
+      subtitle: "Policy - PingOne Privilege AI Gateway — proxies every MCP request",
+      kind: "gateway",
+      spanNames: ["gateway.mcp_discovery", "gateway.mcp_tool_call"],
+      service: SERVICE_TASK_AGENT,
+    },
+  },
+  {
+    id: "mcp",
+    position: { x: 1660, y: 300 },
     data: {
       title: "MCP Todos Server",
       subtitle: "Tool + data + OBO audit log",
@@ -113,7 +124,7 @@ export const STORY_NODES: Array<{
   },
   {
     id: "audit",
-    position: { x: 1260, y: 540 },
+    position: { x: 1660, y: 540 },
     data: {
       title: "OBO Audit Log",
       subtitle: "mcp-todos-server/app/audit.py",
@@ -287,13 +298,23 @@ export const STORY_EDGES: Array<{
     },
   },
   {
-    id: "e-mcp",
+    id: "e-gateway",
     source: "taskagent",
-    target: "mcp",
+    target: "gateway",
     sourceHandle: "right",
     targetHandle: "left",
-    label: "5. MCP tool call — forwards the SAME token one hop further",
-    detail: "list_todos / add_todo / complete_todo — rebuilt fresh per task, not a cached connection.",
+    label: "5. MCP request — gateway bearer + downstream bearer",
+    detail: "Task Agent authenticates to PingOne Privilege AI Gateway with Authorization, while carrying the fresh todos token in X-MCP-Downstream-Authorization.",
+    meta: { spanName: "gateway.mcp_tool_call", service: SERVICE_TASK_AGENT, attributeKeys: ["gateway.outcome", "mcp.tool"] },
+  },
+  {
+    id: "e-mcp",
+    source: "gateway",
+    target: "mcp",
+    sourceHandle: "right",
+    targetHandle: "left2",
+    label: "6. Gateway proxies the MCP tool call",
+    detail: "The gateway routes the request to MCP Todos; the downstream token remains the credential the MCP resource verifies.",
     meta: { spanName: "mcp.tool_call", service: SERVICE_MCP_TODOS, attributeKeys: ["mcp.tool", "mcp.outcome"] },
   },
   {
@@ -450,8 +471,13 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     { id: "bottom2", type: "target", position: "bottom", offset: "50%" },
     { id: "bottom3", type: "target", position: "bottom", offset: "70%" },
   ],
-  mcp: [
+  gateway: [
     { id: "left", type: "target", position: "left", offset: "50%" },
+    { id: "right", type: "source", position: "right", offset: "50%" },
+  ],
+  mcp: [
+    { id: "left", type: "target", position: "left", offset: "35%" },
+    { id: "left2", type: "target", position: "left", offset: "65%" },
     { id: "top", type: "source", position: "top", offset: "35%" },
     { id: "top2", type: "source", position: "top", offset: "65%" },
     { id: "bottom", type: "source", position: "bottom", offset: "50%" },

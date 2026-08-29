@@ -30,7 +30,9 @@ class Settings(BaseSettings):
 
     session_secret: str | None = Field(default=None)
 
-    # Inbound auth for delegated tokens forwarded by task-agent
+    # Inbound auth for the todos-scoped token forwarded by task-agent in
+    # X-MCP-Downstream-Authorization. The outer Authorization header belongs
+    # to the AI Gateway and is not verified by this MCP resource.
     agent_expected_audience: str | None = Field(default=None)
     allowed_agent_client_id: str | None = Field(default=None)
     todos_read_scope: str = Field(default="todos:read")

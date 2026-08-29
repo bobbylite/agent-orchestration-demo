@@ -25,7 +25,7 @@ from app.agent_executor import TaskAgentExecutor
 from app.card import build_agent_card
 from app.config import get_settings
 from app.telemetry import clear_recent_spans, get_recent_spans, init_telemetry
-from app import authorize_audit, token_ledger
+from app import authorize_audit, gateway_audit, token_ledger
 
 
 @asynccontextmanager
@@ -87,6 +87,17 @@ async def authorize_decisions() -> dict:
 @app.delete("/authorize/decisions")
 async def clear_authorize_decisions() -> dict:
     return {"cleared": authorize_audit.clear()}
+
+
+@app.get("/gateway/insights")
+async def gateway_insights() -> dict:
+    """Return bounded, credential-free observations of gateway activity."""
+    return gateway_audit.snapshot(gateway_url=get_settings().mcp_gateway_url)
+
+
+@app.delete("/gateway/insights")
+async def clear_gateway_insights() -> dict:
+    return {"cleared": gateway_audit.clear()}
 
 
 if __name__ == "__main__":

@@ -696,10 +696,13 @@ not a bug.
 
 **mcp-todos-server now receives a token task-agent minted itself, not one
 forwarded unchanged.** Superseded by the 2026-08-16 redesign above:
-`task-agent/app/graph.py`'s MCP tools are fetched once per task purely for
-schemas through the configured AI gateway using its injected
-the request-scoped gateway token forwarded over the internal A2A hop; the
-actual, freshly-authorized direct MCP connection is built per tool call inside
+`task-agent/app/graph.py`'s MCP tools are fetched and invoked through the
+configured AI gateway using the request-scoped gateway bearer in
+`Authorization` and the fresh todos-scoped bearer in
+`X-MCP-Downstream-Authorization`; the gateway preserves the sidecar header
+upstream, and mcp-todos-server verifies that token rather than the gateway
+bearer. The request-scoped gateway token is forwarded over the internal A2A
+hop; the freshly-authorized connection is built per tool call inside
 `_scoped_tool_call`, using a token
 from task-agent's *own* RFC 8693 exchange (step 4 in the chain
 above) — not a header carried over from the Chat Agent. `mcp-todos-server`
@@ -940,8 +943,10 @@ has these settings at all).
   inside a bigger FastAPI app (`mcp-todos-server/app/main.py`) — otherwise
   the streamable-http session manager never starts and every MCP call
   hangs/fails. `get_http_request()` (from `fastmcp.server.dependencies`)
-  is how an `@mcp.tool` function reads the raw `Authorization` header
-  without needing an explicit `ctx: Context` parameter.
+  is how an `@mcp.tool` function reads the raw
+  `X-MCP-Downstream-Authorization` header without needing an explicit
+  `ctx: Context` parameter. The outer `Authorization` header belongs to the
+  AI Gateway; human UI routes remain session-cookie authenticated.
 - **`[project.scripts]` entry points don't get installed when
   `[tool.uv].package = false`** (every service in this repo sets that,
   including `claude-bridge/`) — there's no build/install step to place the

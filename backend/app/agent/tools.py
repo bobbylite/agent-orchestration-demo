@@ -118,7 +118,12 @@ async def _delegate(request: str, config: RunnableConfig, *, intent: str) -> str
                 if task.status.state == TaskState.TASK_STATE_FAILED and task.status.HasField("message"):
                     parts = task.status.message.parts
                     if parts:
-                        span.set_attribute("a2a.failure_reason", parts[-1].text)
+                        failure_reason = parts[-1].text
+                        span.set_attribute("a2a.failure_reason", failure_reason)
+                        # Failed Task Agents do not produce an artifact. Preserve
+                        # their deterministic auth/gateway explanation instead
+                        # of collapsing it into the misleading generic response.
+                        answer = failure_reason
                 if task.artifacts:
                     parts = task.artifacts[-1].parts
                     if parts:

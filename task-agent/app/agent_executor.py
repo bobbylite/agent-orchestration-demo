@@ -181,6 +181,7 @@ class TaskAgentExecutor(AgentExecutor):
                         "granted_scope": identity.scope,
                         "delegation_token": token,
                         "ciba_tokens": ciba_tokens,
+                        "gateway_access_token": gateway_access_token,
                         "thread_id": task.context_id,
                     }
                 },

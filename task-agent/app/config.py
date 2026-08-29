@@ -148,10 +148,6 @@ class Settings(BaseSettings):
         default="https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp"
     )
 
-    # Direct MCP endpoint retained for the existing per-tool authorization
-    # path while gateway tool invocation is rolled out separately.
-    mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
-
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=9010)
     public_url: str = Field(default="http://localhost:9010")

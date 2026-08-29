@@ -101,11 +101,11 @@ def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
         return exc.response.text or str(exc)
 
 
-def _mcp_connection(url: str, bearer_token: str | None = None) -> StreamableHttpConnection:
+def _mcp_connection(url: str, headers: dict[str, str] | None = None) -> StreamableHttpConnection:
     """Build one Streamable HTTP connection shape for an MCP endpoint."""
     connection: StreamableHttpConnection = {"transport": "streamable_http", "url": url}
-    if bearer_token:
-        connection["headers"] = {"Authorization": f"Bearer {bearer_token}"}
+    if headers:
+        connection["headers"] = headers
     return connection
 
 
@@ -123,7 +123,10 @@ async def _get_mcp_tools(settings: Settings, gateway_access_token: str | None) -
         raise RuntimeError(
             "Gateway authentication required: sign in to the AI Gateway before discovering todos tools."
         )
-    connection = _mcp_connection(settings.mcp_gateway_url, gateway_access_token)
+    connection = _mcp_connection(
+        settings.mcp_gateway_url,
+        {"Authorization": f"Bearer {gateway_access_token}"},
+    )
     client = MultiServerMCPClient({"todos": connection})
     try:
         return await client.get_tools()
@@ -173,8 +176,19 @@ def _detail_suffix(detail: str) -> str:
     return f"({cleaned})" if cleaned else ""
 
 
-async def _get_mcp_tool(settings: Settings, tool_name: str, bearer_token: str):
-    connection = _mcp_connection(settings.mcp_todos_url, bearer_token)
+async def _get_mcp_tool(
+    settings: Settings,
+    tool_name: str,
+    gateway_access_token: str,
+    downstream_access_token: str,
+):
+    connection = _mcp_connection(
+        settings.mcp_gateway_url,
+        {
+            "Authorization": f"Bearer {gateway_access_token}",
+            "X-MCP-Downstream-Authorization": f"Bearer {downstream_access_token}",
+        },
+    )
     client = MultiServerMCPClient({"todos": connection})
     for tool in await client.get_tools():
         if tool.name == tool_name:
@@ -229,9 +243,15 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
     client_id = configurable.get("client_id")
     delegation_token = configurable.get("delegation_token")
     ciba_tokens = configurable.get("ciba_tokens", {})
+    gateway_access_token = configurable.get("gateway_access_token")
     capability_entry = _TOOL_CAPABILITY.get(tool_name)
     if not capability_entry or not delegation_token:
         return ToolMessage(content=f"Cannot call '{tool_name}': unsupported tool or missing delegation.", tool_call_id=request.tool_call["id"])
+    if not gateway_access_token:
+        return ToolMessage(
+            content="Gateway authentication required: the MCP gateway credential was not forwarded.",
+            tool_call_id=request.tool_call["id"],
+        )
     capability, scope_setting = capability_entry
     required_scope = getattr(settings, scope_setting)
     ciba_token = ciba_tokens.get(capability) if isinstance(ciba_tokens, dict) else None
@@ -293,7 +313,12 @@ async def _scoped_tool_call(settings: Settings, actor_cache: dict[str, Any], req
         return ToolMessage(content=message, tool_call_id=request.tool_call["id"])
 
     try:
-        tool = await _get_mcp_tool(settings, tool_name, mcp_token)
+        tool = await _get_mcp_tool(
+            settings,
+            tool_name,
+            gateway_access_token,
+            mcp_token,
+        )
         result = await tool.ainvoke(request.tool_call["args"])
     except Exception as exc:  # noqa: BLE001 — surfaced to the model as a normal tool result, not a crash
         return ToolMessage(content=f"The todos service call failed: {exc}", tool_call_id=request.tool_call["id"])

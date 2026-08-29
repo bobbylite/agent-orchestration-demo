@@ -555,15 +555,14 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   check, and the raw verified token itself as `delegation_token` — used
   downstream as the *subject* token for this service's own further
   exchange.
-- `task-agent/app/graph.py` — MCP tools fetched once per task for schema
-  only through the configured AI gateway (`MCP_GATEWAY_URL`), authenticated
-  with the user's separate AI Gateway OAuth session; the real work is in
-  `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
-  policy check, then this service's own Client Credentials (cached per
-  task) + a **fresh, per-tool-call** Token Exchange scoped to exactly
-  `todos:read` or `todos:write`, then a freshly-authorized MCP connection
-  built just for that one call. This is what gives step-up scoping for
-  free — nothing about which scope was granted is cached across calls.
+- `task-agent/app/graph.py` — MCP tools are fetched and invoked through
+  `MCP_GATEWAY_URL`, authenticated with the user's separate AI Gateway OAuth
+  session. Every MCP request carries `Authorization: Bearer <gateway-token>`
+  plus `X-MCP-Downstream-Authorization: Bearer <todos-token>`; the gateway
+  promotes the sidecar token upstream. `_scoped_tool_call` performs policy
+  checks, then this service's own Client Credentials (cached per task) plus a
+  **fresh, per-tool-call** Token Exchange scoped to exactly `todos:read`,
+  `todos:write`, or `todos:delete`, preserving step-up scoping.
   The same file also builds the `judge` node — a `JudgeVerdict` Pydantic
   contract, on `ChatAnthropic` or `ChatGroq` depending on `JUDGE_PROVIDER`
   — that grades `task_assistant`'s proposed answer against the delegated

@@ -279,7 +279,8 @@ curl -k -X POST \
     "client_name": "Agent Orchestration Console",
     "client_uri": "http://localhost:5173",
     "redirect_uris": [
-      "http://localhost:8000/api/auth/gateway/callback"
+      "http://localhost:8000/api/auth/gateway/callback",
+      "https://rluisi-agent-orchestration-client.ping-devops.com/api/auth/gateway/callback"
     ],
     "token_endpoint_auth_method": "none",
     "grant_types": ["authorization_code", "refresh_token"],

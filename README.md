@@ -305,6 +305,31 @@ startup. Gateway access and refresh tokens remain in an encrypted HttpOnly
 backend cookie and are passed to the Task Agent only over the internal A2A
 request.
 
+#### Gateway client registrations are not durable — "Unknown client" recovery
+
+The gateway's dynamic-client registry does not survive gateway restarts or
+redeploys. If gateway login suddenly fails with `400 Unknown client` (or the
+authorize page rejects the configured `GATEWAY_CLIENT_ID`), the gateway has
+dropped the registration — the app config is fine. Confirmed 2026-08-30: a
+client registered earlier the same week was gone from the gateway while the
+deployed backend still carried it.
+
+Recovery: re-run the `/register` curl above, put the returned `client_id`
+into `helm/values.yaml`'s backend `GATEWAY_CLIENT_ID` (and `backend/.env`
+for local), then `helm upgrade --install ... -f helm/values.yaml` **plus**
+`kubectl rollout restart deployment/agentorchestration-backend -n
+ping-devops-robertluisi` — `envFrom` values only load at pod start. Verify
+with `kubectl exec ... -- printenv GATEWAY_CLIENT_ID` and a 302 (not 400)
+from the authorize endpoint. `.claude/skills/gateway-client-reregistration/`
+has the full step-by-step procedure, including the diagnosis probe that
+distinguishes a dropped registration from other login failures.
+
+Two related facts: Postman-minted client IDs (from its own per-flow dynamic
+registration, redirect `oauth.pstmn.io`) must never be copied into the app
+config — they are bound to Postman's redirect, not the app's; and the
+client_id itself is a public identifier, so storing it in `values.yaml` is
+correct — only tokens/secrets must stay out.
+
 `SESSION_SECRET` is required by either sign-in app (any long random
 string; hashed into the 32-byte key used for JWE session encryption — use
 a *different* value per service, they don't share sessions).

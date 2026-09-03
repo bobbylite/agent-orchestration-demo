@@ -16,12 +16,21 @@ def authorization_url(
     state: str,
     code_challenge: str,
     redirect_uri: str,
+    client_id: str | None = None,
 ) -> str:
-    if not settings.gateway_authorization_endpoint or not settings.gateway_client_id:
+    # Only the endpoints are required here — the client_id comes from the
+    # process's startup DCR registration (app/auth/gateway_dcr.py), not the
+    # (possibly empty) GATEWAY_CLIENT_ID seed.
+    if not settings.gateway_authorization_endpoint:
         raise RuntimeError("AI Gateway OAuth is not configured")
+    if not client_id and not settings.gateway_client_id:
+        raise RuntimeError("AI Gateway OAuth has no client_id (DCR registration did not run)")
     params = {
         "response_type": "code",
-        "client_id": settings.gateway_client_id,
+        # Explicit client_id wins over the configured value — routes pass the
+        # process-registered DCR client (app/auth/gateway_dcr.py) so login
+        # always uses THIS process's own client, not a stale configured one.
+        "client_id": client_id or settings.gateway_client_id,
         "redirect_uri": redirect_uri,
         "scope": settings.gateway_scopes,
         "state": state,
@@ -37,15 +46,18 @@ async def exchange_code(
     code: str,
     code_verifier: str,
     redirect_uri: str,
+    client_id: str | None = None,
 ) -> dict[str, Any]:
-    if not settings.gateway_token_endpoint or not settings.gateway_client_id:
+    if not settings.gateway_token_endpoint:
         raise RuntimeError("AI Gateway OAuth is not configured")
+    if not client_id and not settings.gateway_client_id:
+        raise RuntimeError("AI Gateway OAuth has no client_id (DCR registration did not run)")
     data = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
         "code_verifier": code_verifier,
-        "client_id": settings.gateway_client_id,
+        "client_id": client_id or settings.gateway_client_id,
     }
     auth = None
     if settings.gateway_client_auth_method == "client_secret_post":
@@ -58,13 +70,20 @@ async def exchange_code(
         return response.json()
 
 
-async def refresh_token(settings: Settings, refresh_token_value: str) -> dict[str, Any]:
-    if not settings.gateway_token_endpoint or not settings.gateway_client_id:
+async def refresh_token(
+    settings: Settings,
+    refresh_token_value: str,
+    *,
+    client_id: str | None = None,
+) -> dict[str, Any]:
+    if not settings.gateway_token_endpoint:
         raise RuntimeError("AI Gateway OAuth is not configured")
+    if not client_id and not settings.gateway_client_id:
+        raise RuntimeError("AI Gateway OAuth has no client_id (DCR registration did not run)")
     data = {
         "grant_type": "refresh_token",
         "refresh_token": refresh_token_value,
-        "client_id": settings.gateway_client_id,
+        "client_id": client_id or settings.gateway_client_id,
     }
     if settings.gateway_client_auth_method == "client_secret_post":
         data["client_secret"] = settings.gateway_client_secret or ""

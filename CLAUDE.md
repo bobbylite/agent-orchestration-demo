@@ -1075,6 +1075,67 @@ delete, so the model doesn't invent or promise unsupported fields), and a
 note on why narrating the delegation is in-character for this demo. Add
 it via Claude Desktop's Skills settings, pointed at that folder.
 
+## AI Gateway DCR clients are ephemeral — startup registration + silent refresh (added 2026-09-02)
+
+The deployed AI Gateway (`https://rluisi-agentless-mcpgw.ping-devops.com`,
+namespace `ping-devops-robertluisi`, Helm chart
+`~/projects/devops/mcpgw/agentless-mcpgw/`, image `public.ecr.aws/s7q1z8z4/
+privilege-aigw`, codebase `github.com/procyonai/orion`) forgets its RFC 7591
+dynamically-registered OAuth clients on an internal schedule that is NOT
+tied to gateway restarts — confirmed live 2026-09-01: the gateway pod had
+**0 restarts across 5+ days** while a previously working `client_id` got
+`400 Unknown client` from `/authorize` (gateway log:
+`[mcpgw] authorize for unregistered client_id "..."; rejecting`,
+`server.go:517`). In-memory registry, closed-source `mcpgw` binary,
+undocumented eviction policy; the gateway's log buffer only retains ~11
+hours, so evictions can't be correlated with registrations from outside.
+Do **not** re-derive this — the older "gateway restarted and lost its
+store" explanation is disproven.
+
+**The backend now treats `GATEWAY_CLIENT_ID` as a fallback seed, not the
+source of truth.** Two modules, both in `backend/app/auth/`:
+
+- **`gateway_dcr.py`** — registers ONE client per process:
+  `main.py`'s lifespan calls `ensure_client_registered()` at startup (only
+  when `gateway_configured`; failure is logged + non-fatal, retried lazily
+  from the first gateway login), and that client is kept for the process's
+  entire lifetime. `/gateway/login` uses the same id (zero network on the
+  happy path); `mark_evicted()` flags it when an `unknown client` response
+  is seen; `ensure_client_registered(force=True)` then mints a replacement.
+  Registration payload (`REGISTRATION_PAYLOAD`) covers BOTH the local and
+  deployed callback URIs, public client (`token_endpoint_auth_method:
+  none`), grants `authorization_code` + `refresh_token`.
+- **`gateway_tokens.py`** — server-side per-`sub` store of the gateway
+  token pair. `/gateway/callback` persists BOTH tokens here (access, 1 h;
+  refresh, 30 days — refresh-token support was enabled on the gateway
+  2026-09-02; response carries `refresh_token_expires_in`) in addition to
+  the encrypted browser cookie. The invoke route resolves its gateway
+  token through `resolve_access_token()`'s ladder: fresh stored access
+  token → silent `refresh_token` grant → on unknown-client, re-register
+  the client and retry the refresh once against the new client (usually
+  dead — refresh tokens die with their client — but one cheap call) →
+  `None`, which surfaces as the existing `gateway_auth_required` stream
+  error (interactive re-login is now the LAST resort, not the default
+  recovery). `/me` reports `gateway_can_resolve` (cookie-fresh OR a
+  refresh token is available server-side) so the UI doesn't demand a
+  re-login while a silent refresh would still succeed; the 2s `/me` poll
+  never triggers the refresh itself. Logout drops the store entry.
+
+- `/gateway/callback` pins the token exchange to the `client_id` saved in
+  the flow's state cookie (the one that started THIS flow — a concurrent
+  re-registration must not swap it mid-flight); an `unknown client`
+  rejection there calls `gateway_dcr.mark_evicted()` and redirects with
+  the normal `gateway_auth_error=1` (the code is bound to the dead client
+  and cannot be salvaged; the NEXT login starts from a fresh client).
+- `gateway_oidc.authorization_url()/exchange_code()/refresh_token()` all
+  take an optional `client_id` override for this threading.
+- `GATEWAY_REGISTRATION_ENDPOINT` (Settings field, in `.env.example` +
+  helm values + backend-configmap template) points at
+  `/todos-mcp-server/register`. All DCR/refresh calls use `verify=False`
+  because the gateway presents a self-signed cert in this environment
+  (same reason the diagnosis skill's curl uses `-k`); every other gateway
+  call goes through the browser or an authorized session.
+
 ## Skills
 
 - `run` — start all services correctly (handles the cwd/Node gotchas above;

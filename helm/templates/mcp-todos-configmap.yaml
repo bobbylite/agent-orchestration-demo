@@ -10,6 +10,7 @@ data:
   OIDC_SCOPES: {{ .Values.mcpTodosServer.env.OIDC_SCOPES | quote }}
   OIDC_POST_LOGOUT_REDIRECT_URI: {{ .Values.mcpTodosServer.env.OIDC_POST_LOGOUT_REDIRECT_URI | quote }}
   AGENT_EXPECTED_AUDIENCE: {{ .Values.mcpTodosServer.env.AGENT_EXPECTED_AUDIENCE | quote }}
+  MCP_AUTH_DOWNSTREAM_HEADER: {{ .Values.mcpTodosServer.env.MCP_AUTH_DOWNSTREAM_HEADER | quote }}
   ALLOWED_AGENT_CLIENT_ID: {{ .Values.mcpTodosServer.env.ALLOWED_AGENT_CLIENT_ID | quote }}
   TODOS_READ_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_WRITE_SCOPE | quote }}

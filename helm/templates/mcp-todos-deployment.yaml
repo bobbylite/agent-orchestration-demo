@@ -25,7 +25,7 @@ spec:
       {{- end }}
       containers:
         - name: mcp-todos-server
-          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.mcpTodosServer.image) }}
+          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.mcpTodosServer.image "nameTag" .Values.mcpTodosServer.imageTag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

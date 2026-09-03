@@ -29,26 +29,39 @@ from app.config import get_settings
 mcp = FastMCP("Todos")
 
 
-def _downstream_bearer_token() -> str:
-    """Read the MCP caller token, not the gateway's outer bearer.
+def _call_bearer_token() -> str:
+    """Read the delegated MCP caller token from the header the current auth
+    mode selects (app/config.py's mcp_auth_downstream_header):
 
-    The gateway's Authorization header authenticates the gateway request. The
-    token that this resource verifies is carried in the dedicated downstream
-    header so its audience and todos scope remain intact.
+    - true (default, gateway mode): the token rides
+      X-MCP-Downstream-Authorization — the outer Authorization header is the
+      AI Gateway's own credential, whose audience/scope would never verify
+      here, so it must not be mistaken for the delegated token.
+    - false (direct mode): the standard Authorization header carries the
+      delegated token (callers that bypass the gateway).
+
+    The error reasons are prefixed downstream_/standard_ respectively so a
+    misconfigured mode is visible in the ToolError text.
     """
     request = get_http_request()
-    header = request.headers.get("x-mcp-downstream-authorization", "").strip()
+    settings = get_settings()
+    if settings.mcp_auth_downstream_header:
+        header = request.headers.get("x-mcp-downstream-authorization", "").strip()
+        missing, invalid = "missing_downstream_bearer_token", "invalid_downstream_bearer_token"
+    else:
+        header = request.headers.get("authorization", "").strip()
+        missing, invalid = "missing_standard_bearer_token", "invalid_standard_bearer_token"
     if not header:
-        raise InboundAuthError("missing_downstream_bearer_token")
+        raise InboundAuthError(missing)
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
-        raise InboundAuthError("invalid_downstream_bearer_token")
+        raise InboundAuthError(invalid)
     return token.strip()
 
 
 async def _verify_caller() -> VerifiedIdentity:
     settings = get_settings()
-    token = _downstream_bearer_token()
+    token = _call_bearer_token()
     return await verify_bearer_token(
         token,
         discovery_url=settings.oidc_discovery_url or "",
@@ -95,7 +108,7 @@ async def _authorize(tool_name: str) -> VerifiedIdentity:
 
     with with_span("authorize.mcp_tool_call", {"policy.tool": tool_name}) as span:
         permitted, reason = await authorize.check_tool_call(
-            get_settings(), access_token=_downstream_bearer_token(), tool_name=tool_name
+            get_settings(), access_token=_call_bearer_token(), tool_name=tool_name
         )
         span.set_attribute("policy.result", "permit" if permitted else "deny")
         if not permitted:

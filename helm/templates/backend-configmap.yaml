@@ -14,6 +14,7 @@ data:
   GATEWAY_ISSUER: {{ .Values.backend.env.GATEWAY_ISSUER | quote }}
   GATEWAY_AUTHORIZATION_ENDPOINT: {{ .Values.backend.env.GATEWAY_AUTHORIZATION_ENDPOINT | quote }}
   GATEWAY_TOKEN_ENDPOINT: {{ .Values.backend.env.GATEWAY_TOKEN_ENDPOINT | quote }}
+  GATEWAY_REGISTRATION_ENDPOINT: {{ .Values.backend.env.GATEWAY_REGISTRATION_ENDPOINT | quote }}
   GATEWAY_CLIENT_ID: {{ .Values.backend.env.GATEWAY_CLIENT_ID | quote }}
   GATEWAY_CLIENT_AUTH_METHOD: {{ .Values.backend.env.GATEWAY_CLIENT_AUTH_METHOD | quote }}
   GATEWAY_SCOPES: {{ .Values.backend.env.GATEWAY_SCOPES | quote }}

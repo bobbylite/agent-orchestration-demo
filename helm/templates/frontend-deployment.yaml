@@ -25,7 +25,7 @@ spec:
       {{- end }}
       containers:
         - name: frontend
-          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.frontend.image) }}
+          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.frontend.image "nameTag" .Values.frontend.imageTag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

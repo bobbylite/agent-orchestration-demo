@@ -25,7 +25,7 @@ spec:
       {{- end }}
       containers:
         - name: todos-ui
-          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.todosUi.image) }}
+          image: {{ include "agentorchestration.image" (dict "root" . "name" .Values.todosUi.image "nameTag" .Values.todosUi.imageTag) }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

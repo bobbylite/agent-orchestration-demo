@@ -30,14 +30,24 @@ class Settings(BaseSettings):
 
     session_secret: str | None = Field(default=None)
 
-    # Inbound auth for the todos-scoped token forwarded by task-agent in
-    # X-MCP-Downstream-Authorization. The outer Authorization header belongs
-    # to the AI Gateway and is not verified by this MCP resource.
+    # Inbound auth for the delegated todos-scoped token. WHICH header carries
+    # it is a single toggle (see _call_bearer_token in app/mcp_server.py):
+    #   mcp_auth_downstream_header = true  -> X-MCP-Downstream-Authorization
+    #                                         (current/normal mode: the outer
+    #                                         Authorization header belongs to
+    #                                         the AI Gateway, so the delegated
+    #                                         token rides the sidecar header
+    #                                         the gateway preserves upstream)
+    #   mcp_auth_downstream_header = false -> the standard Authorization
+    #                                         header (direct callers that
+    #                                         bypass the gateway)
     agent_expected_audience: str | None = Field(default=None)
     allowed_agent_client_id: str | None = Field(default=None)
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
     todos_delete_scope: str = Field(default="todos:delete")
+    mcp_auth_downstream_header: bool = Field(default=True)
+    mcp_auth_fallback_standard_header: bool = Field(default=False)
 
     # Friendly label for the audit log ("Agent Task Agent used ..." instead
     # of a raw client_id) — purely cosmetic, defaults to the client_id.

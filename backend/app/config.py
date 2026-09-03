@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     gateway_issuer: str | None = Field(default=None)
     gateway_authorization_endpoint: str | None = Field(default=None)
     gateway_token_endpoint: str | None = Field(default=None)
+    gateway_registration_endpoint: str | None = Field(default=None)
     gateway_client_id: str | None = Field(default=None)
     gateway_client_secret: str | None = Field(default=None)
     gateway_client_auth_method: str = Field(default="none")
@@ -98,11 +99,18 @@ class Settings(BaseSettings):
 
     @property
     def gateway_configured(self) -> bool:
+        # GATEWAY_CLIENT_ID is deliberately NOT required: since the 2026-09-02
+        # self-healing DCR model the backend registers its own client at
+        # startup (app/auth/gateway_dcr.py) — the configured value is only a
+        # fallback seed and may legitimately be empty. Requiring it here made
+        # gateway_configured False the moment the seed was cleared, which
+        # skipped startup registration entirely and hid the gateway from
+        # /me (gateway_enabled=false).
         return bool(
             self.gateway_issuer
             and self.gateway_authorization_endpoint
             and self.gateway_token_endpoint
-            and self.gateway_client_id
+            and self.gateway_registration_endpoint
             and self.session_secret
         )
 

@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth import gateway_oidc, oidc
+from app.auth import gateway_dcr, gateway_oidc, gateway_tokens, oidc
 from app.auth.agent_auth import client_credentials_grant, token_exchange
 from app.auth import ciba, ciba_store
 from app.auth.ciba import CibaError
@@ -118,6 +118,16 @@ async def gateway_login(request: Request, settings: Settings = Depends(get_setti
         raise HTTPException(status_code=401, detail="Sign in with PingOne first")
     if not settings.gateway_configured:
         raise HTTPException(status_code=400, detail="AI Gateway OAuth is not configured")
+    # Use THIS process's own registered client (see app/auth/gateway_dcr.py —
+    # registered at startup, kept for the process lifetime). ensure_client_
+    # registered re-runs only if startup registration failed or the client
+    # was flagged evicted, so this is normally zero network calls.
+    try:
+        with with_span("gateway.dcr.resolve") as span:
+            gateway_client_id = await gateway_dcr.ensure_client_registered(settings)
+            span.set_attribute("gateway.client_id", gateway_client_id)
+    except gateway_dcr.GatewayRegistrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     verifier, challenge = generate_pkce_pair()
     state = generate_token()
     response = RedirectResponse(
@@ -126,9 +136,14 @@ async def gateway_login(request: Request, settings: Settings = Depends(get_setti
             state=state,
             code_challenge=challenge,
             redirect_uri=_gateway_redirect_uri(settings),
+            client_id=gateway_client_id,
         )
     )
-    _gateway_state_cookie(response, {"state": state, "verifier": verifier, "sub": session["sub"]}, settings)
+    _gateway_state_cookie(
+        response,
+        {"state": state, "verifier": verifier, "sub": session["sub"], "client_id": gateway_client_id},
+        settings,
+    )
     return response
 
 
@@ -149,14 +164,32 @@ async def gateway_callback(
         "gateway.login.callback",
         {"gateway.auth_method": settings.gateway_client_auth_method},
     ) as span:
+        # The client_id that started THIS flow (stored in the state cookie by
+        # /gateway/login) — not whatever the process currently holds, which
+        # a re-registration could have swapped mid-flight.
+        flow_client_id = saved.get("client_id") or gateway_dcr.current_client_id()
         try:
             tokens = await gateway_oidc.exchange_code(
                 settings,
                 code=code,
                 code_verifier=saved["verifier"],
                 redirect_uri=_gateway_redirect_uri(settings),
+                client_id=flow_client_id,
             )
             span.set_attribute("gateway.outcome", "ok")
+        except httpx.HTTPStatusError as exc:
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            # The gateway may have evicted this process's client between the
+            # authorize redirect and this callback. An authorization code is
+            # bound to the client that requested it, so this flow can't be
+            # salvaged — flag the client dead so the next login (or the
+            # silent-refresh ladder) recovers, and send the user back with
+            # the normal error redirect.
+            if "unknown client" in exc.response.text.lower():
+                gateway_dcr.mark_evicted()
+                span.set_attribute("gateway.failure_reason", "unknown_client")
+            return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
         except (httpx.HTTPError, RuntimeError) as exc:
             span.set_attribute("gateway.outcome", "error")
             span.set_attribute("gateway.failure_type", type(exc).__name__)
@@ -176,6 +209,11 @@ async def gateway_callback(
         },
         settings,
     )
+    # Persist BOTH tokens server-side too (access + refresh). The cookie
+    # above stays per-browser-session; this store is what lets invoke/telemetry
+    # keep working across access-token expiry via the silent-refresh ladder
+    # in app/auth/gateway_tokens.py, without another browser round-trip.
+    gateway_tokens.store_tokens(session["sub"], tokens)
     return response
 
 
@@ -263,6 +301,10 @@ async def logout(request: Request, settings: Settings = Depends(get_settings)) -
         clear_cookie(response, GATEWAY_STATE_COOKIE, settings)
         clear_cookie(response, GATEWAY_TOKEN_COOKIE, settings)
         ciba_store.clear_for_session((session or {}).get("sub", ""))
+        if session and session.get("sub"):
+            # Also drop the server-side gateway token pair — logout means
+            # this identity's gateway grant is gone from this process.
+            gateway_tokens.drop(session["sub"])
         return response
 
 
@@ -398,23 +440,34 @@ async def me(request: Request, settings: Settings = Depends(get_settings)) -> di
     session = read_cookie(request, SESSION_COOKIE, settings)
     delegated = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
     gateway = read_cookie(request, GATEWAY_TOKEN_COOKIE, settings)
+    sub = (session or {}).get("sub")
     gateway_authenticated = bool(
         gateway
         and gateway.get("access_token")
-        and gateway.get("sub") == (session or {}).get("sub")
+        and gateway.get("sub") == sub
         and _gateway_token_is_fresh(gateway, settings)
+    )
+    # Server-side store view: a user whose access token expired but whose
+    # refresh token is still good counts as authenticated — resolve (which
+    # silently refreshes) will succeed without a browser round-trip. The
+    # 2-second /me poll never triggers the refresh itself (no network cost
+    # per poll); it only reports what the ladder WOULD do.
+    server_store = gateway_tokens.status(sub) if sub else {"access_fresh": False, "refresh_available": False}
+    gateway_can_resolve = gateway_authenticated or bool(
+        settings.gateway_configured and session and server_store.get("refresh_available")
     )
     return {
         "oidc_enabled": settings.oidc_configured,
         "agent_enabled": settings.agent_configured,
         "signed_in": bool(session),
-        "sub": (session or {}).get("sub"),
+        "sub": sub,
         "email": (session or {}).get("email"),
         "name": (session or {}).get("name"),
         "agent_delegated": bool(delegated),
         "gateway_enabled": settings.gateway_configured,
         "gateway_authenticated": gateway_authenticated,
-        "gateway_auth_required": bool(settings.gateway_configured and session and not gateway_authenticated),
+        "gateway_can_resolve": gateway_can_resolve,
+        "gateway_auth_required": bool(settings.gateway_configured and session and not gateway_can_resolve),
     }
 
 

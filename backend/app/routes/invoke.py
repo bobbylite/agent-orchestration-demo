@@ -11,23 +11,16 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.agent.graph import resolved_model_label
 from app.agent.tools import CIBA_REQUIRED_MARKER
-from app.auth import ciba, ciba_store
+from app.auth import ciba, ciba_store, gateway_tokens
 from app.auth.inbound import InboundAuthError, verify_inbound_token
 from app.auth.routes import _mint_agent_token
-from app.auth.session import CIBA_TOKEN_COOKIE, EXCHANGED_TOKEN_COOKIE, GATEWAY_TOKEN_COOKIE, SESSION_COOKIE, read_cookie, set_sealed_cookie
+from app.auth.session import CIBA_TOKEN_COOKIE, EXCHANGED_TOKEN_COOKIE, SESSION_COOKIE, read_cookie
 from app.config import Settings, get_settings
 from app.models import InvokeRequest
 from app.telemetry import with_span
 
 router = APIRouter(prefix="/api", tags=["invoke"])
 _DELEGATING_TOOLS = {"ask_task_agent_read", "ask_task_agent_write"}
-
-
-def _gateway_token_is_fresh(entry: dict[str, Any], settings: Settings) -> bool:
-    try:
-        return float(entry.get("expires_at", 0)) > time.time() + settings.gateway_refresh_skew
-    except (TypeError, ValueError):
-        return False
 
 
 def _extract_text(content: Any) -> str:
@@ -50,14 +43,12 @@ async def invoke(request: Request, body: InvokeRequest, settings: Settings = Dep
     agent_client_id: str | None = None
     delegated_token: str | None = None
     ciba_tokens = ciba_store.get_tokens(session.get("sub", ""))
-    gateway_entry = read_cookie(request, GATEWAY_TOKEN_COOKIE, settings)
-    gateway_access_token = (
-        gateway_entry.get("access_token")
-        if gateway_entry
-        and gateway_entry.get("sub") == session.get("sub")
-        and _gateway_token_is_fresh(gateway_entry, settings)
-        else None
-    )
+    # Gateway token resolution — the ladder in app/auth/gateway_tokens.py:
+    # fresh stored access token → silent refresh → (on unknown-client)
+    # re-register + retry refresh → None. A None here means the user's
+    # gateway grant is genuinely unusable; the stream then emits the
+    # gateway_auth_required error below rather than a crash.
+    gateway_access_token = await gateway_tokens.resolve_access_token(settings, session.get("sub", ""))
 
     delegated_entry = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
     candidate_token = (delegated_entry or {}).get("access_token")

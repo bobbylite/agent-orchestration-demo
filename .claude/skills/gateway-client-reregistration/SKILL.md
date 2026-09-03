@@ -9,6 +9,17 @@ description: >
 
 # Re-registering the AI Gateway OAuth client after "Unknown client"
 
+**Since 2026-09-02 the backend handles this itself** —
+`backend/app/auth/gateway_dcr.py` registers a client at startup and keeps
+it for the process lifetime, and `backend/app/auth/gateway_tokens.py`
+silently refreshes expired access tokens (and re-registers the client when
+the gateway reports `unknown client`). See CLAUDE.md's "AI Gateway DCR
+clients are ephemeral" section for the design. This skill remains useful
+for diagnosing *other* gateway login failures, verifying a self-heal, and
+clusters/branches that predate the self-heal logic.
+
+---
+
 The deployed AI Gateway (`https://rluisi-agentless-mcpgw.ping-devops.com`,
 path prefix `/todos-mcp-server`) creates OAuth clients through **dynamic
 client registration (RFC 7591)** — `POST /todos-mcp-server/register`. Those

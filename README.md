@@ -268,7 +268,10 @@ Agent signs the user into the gateway with a second Authorization Code + PKCE
 flow, separate from the PingOne login used for the delegation chain. Do not
 hardcode a gateway access token in `task-agent/.env`.
 
-Register a separate public OAuth client for this application:
+This app's gateway OAuth client is registered dynamically (RFC 7591) — the
+backend registers its own at startup and re-registers automatically when
+the gateway forgets it (see the durability note below). To create the
+initial seed client by hand:
 
 ```bash
 curl -k -X POST \
@@ -291,7 +294,8 @@ curl -k -X POST \
 The gateway uses a self-signed certificate in some local environments, so
 `-k` may be required locally. Prefer installing the appropriate CA certificate
 instead of disabling verification in production. Copy the returned `client_id`
-into `backend/.env`:
+into `backend/.env` as the fallback seed (the backend prefers its own
+startup-registered client; see the durability note below):
 
 ```env
 GATEWAY_CLIENT_ID=<returned-client-id>
@@ -299,30 +303,68 @@ GATEWAY_CLIENT_AUTH_METHOD=none
 GATEWAY_REDIRECT_URI=http://localhost:8000/api/auth/gateway/callback
 ```
 
-The callback URI must match the registered value exactly. After changing
-`backend/.env`, restart the backend because settings are cached at process
-startup. Gateway access and refresh tokens remain in an encrypted HttpOnly
+Gateway access and refresh tokens remain in an encrypted HttpOnly
 backend cookie and are passed to the Task Agent only over the internal A2A
 request.
 
-#### Gateway client registrations are not durable — "Unknown client" recovery
+#### Gateway client registrations are not durable — self-healing registration + silent refresh
 
-The gateway's dynamic-client registry does not survive gateway restarts or
-redeploys. If gateway login suddenly fails with `400 Unknown client` (or the
-authorize page rejects the configured `GATEWAY_CLIENT_ID`), the gateway has
-dropped the registration — the app config is fine. Confirmed 2026-08-30: a
-client registered earlier the same week was gone from the gateway while the
-deployed backend still carried it.
+The gateway forgets dynamically-registered clients on its own schedule —
+**not** tied to gateway restarts (confirmed live 2026-09-01: the gateway pod
+had 0 restarts across 5+ days while a previously working `client_id` came
+back `400 Unknown client`; the gateway's own log showed
+`authorize for unregistered client_id ...; rejecting`). Its DCR registry
+lives in the gateway process's memory with an undocumented internal
+eviction policy, so treat any registered client as eventually-expiring.
 
-Recovery: re-run the `/register` curl above, put the returned `client_id`
-into `helm/values.yaml`'s backend `GATEWAY_CLIENT_ID` (and `backend/.env`
-for local), then `helm upgrade --install ... -f helm/values.yaml` **plus**
-`kubectl rollout restart deployment/agentorchestration-backend -n
-ping-devops-robertluisi` — `envFrom` values only load at pod start. Verify
-with `kubectl exec ... -- printenv GATEWAY_CLIENT_ID` and a 302 (not 400)
-from the authorize endpoint. `.claude/skills/gateway-client-reregistration/`
-has the full step-by-step procedure, including the diagnosis probe that
-distinguishes a dropped registration from other login failures.
+**The backend now handles this itself** (added 2026-09-02, after refresh
+tokens were enabled on the gateway):
+
+- **One client per process, registered at startup.** `backend/main.py`'s
+  lifespan calls `app/auth/gateway_dcr.py`'s `ensure_client_registered()`
+  — an RFC 7591 `POST /register` (payload covers both local and deployed
+  callback URIs), kept for the process's entire lifetime. `GATEWAY_CLIENT_ID`
+  in `.env`/helm is only a fallback seed; a fresh process always mints its
+  own client so the very first browser login already hits a client the
+  gateway recognizes. Startup failure is logged, non-fatal, and retried
+  lazily on first gateway login.
+- **Both tokens persist server-side.** The `/gateway/callback` exchange
+  stores the access token (1 h) AND refresh token (30 days —
+  `refresh_token_expires_in: 2592000`) in an in-memory per-user store
+  (`app/auth/gateway_tokens.py`), on top of the existing encrypted cookie.
+- **Silent refresh on expiry.** Chat invocations resolve the gateway token
+  through a ladder: fresh stored access token → silent `refresh_token`
+  grant → if that fails with `unknown client` (the gateway evicted the
+  client), re-register a client and retry the refresh once → give up and
+  ask the user to re-login. Interactive browser login is now the last
+  resort, not the default recovery.
+- **Logout drops the server-side pair** along with the cookies.
+
+Manual bootstrap of the initial seed client (still valid; what the backend
+replicates automatically):
+
+```bash
+curl -k -X POST \
+  'https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/register' \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "client_name": "Agent Orchestration Console",
+    "client_uri": "http://localhost:5173",
+    "redirect_uris": [
+      "http://localhost:8000/api/auth/gateway/callback",
+      "https://rluisi-agent-orchestration-client.ping-devops.com/api/auth/gateway/callback"
+    ],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"]
+  }'
+```
+
+Two related facts: Postman-minted client IDs (from its own per-flow dynamic
+registration, redirect `oauth.pstmn.io`) must never be copied into the app
+config — they are bound to Postman's redirect, not the app's; and the
+client_id itself is a public identifier, so storing it in `values.yaml` is
 
 Two related facts: Postman-minted client IDs (from its own per-flow dynamic
 registration, redirect `oauth.pstmn.io`) must never be copied into the app

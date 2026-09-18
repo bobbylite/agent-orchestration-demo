@@ -148,6 +148,25 @@ class Settings(BaseSettings):
         default="https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp"
     )
 
+    # False = "direct mode": skip the AI Gateway entirely and talk to
+    # mcp-todos-server's own /mcp endpoint (mcp_direct_url), requiring no
+    # gateway bearer and sending only X-MCP-Downstream-Authorization (the
+    # fresh per-call todos-scoped token, verified by the MCP server as
+    # usual). mcp-todos-server's MCP_AUTH_DOWNSTREAM_HEADER=true mode already
+    # supports exactly this caller shape. True (default) = today's gateway
+    # path. Lets the whole system run locally without the deployed gateway.
+    gateway_required: bool = Field(default=True)
+    # MCP endpoint used in direct mode (gateway_required=false). Kept separate
+    # from mcp_gateway_url so toggling modes is a one-boolean flip.
+    mcp_direct_url: str = Field(default="http://localhost:9000/mcp")
+
+    @property
+    def mcp_endpoint_url(self) -> str:
+        """Where MCP discovery/calls actually go in the current mode — used
+        for connections, span attributes, and the gateway audit trail so
+        everything reports the real destination."""
+        return self.mcp_direct_url if not self.gateway_required else self.mcp_gateway_url
+
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=9010)
     public_url: str = Field(default="http://localhost:9010")

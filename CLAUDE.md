@@ -1136,6 +1136,35 @@ source of truth.** Two modules, both in `backend/app/auth/`:
   (same reason the diagnosis skill's curl uses `-k`); every other gateway
   call goes through the browser or an authorized session.
 
+## Configurable AI Gateway bypass — `GATEWAY_REQUIRED` (added 2026-09-18)
+
+`task-agent/.env`'s `GATEWAY_REQUIRED=false` ("direct mode") makes the
+Task Agent talk straight to `mcp-todos-server`'s own `/mcp` endpoint
+(`MCP_DIRECT_URL`, default `http://localhost:9000/mcp`) instead of the
+deployed AI Gateway — no gateway bearer required or sent, so the whole
+system can be demoed/tested with zero calls to
+`rluisi-agentless-mcpgw.ping-devops.com`. Toggling back is the same one
+boolean (the two URLs are separate settings on purpose). `Settings.mcp_endpoint_url`
+(`task-agent/app/config.py`) resolves which endpoint is live; spans,
+`gateway_audit` entries, and `/gateway/insights` all report the real
+destination through it, so the frontend's AiGatewayPanel/diagram keep
+working unchanged (same span names, just a local URL).
+
+**Direct mode needs only two env toggles, no mcp-todos-server changes**:
+its existing `MCP_AUTH_DOWNSTREAM_HEADER=true` mode already reads the
+delegated token exclusively from `X-MCP-Downstream-Authorization` and never
+verifies the outer `Authorization` header (which was only ever the
+gateway's credential), and its `/mcp` `tools/list` is unauthenticated
+(verification happens per tool call). The other half is `backend/.env`:
+comment out the `GATEWAY_*` block → `gateway_configured` False → no
+startup DCR, no SSE gateway gate, `gateway_enabled:false` in `/me`. All
+PingOne auth is untouched in either mode — inbound auth, the RFC 8693
+chain, the per-tool-call scoped exchange (step 4), policy ACLs, the
+Authorize PDP, and CIBA all still run exactly as before; only the
+gateway boundary is rerouted. Side effect: `claude-bridge/` (which never
+sends a gateway header) works through the chain in direct mode too.
+
+
 ## Skills
 
 - `run` — start all services correctly (handles the cwd/Node gotchas above;

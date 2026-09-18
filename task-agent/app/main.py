@@ -92,7 +92,7 @@ async def clear_authorize_decisions() -> dict:
 @app.get("/gateway/insights")
 async def gateway_insights() -> dict:
     """Return bounded, credential-free observations of gateway activity."""
-    return gateway_audit.snapshot(gateway_url=get_settings().mcp_gateway_url)
+    return gateway_audit.snapshot(gateway_url=get_settings().mcp_endpoint_url)
 
 
 @app.delete("/gateway/insights")

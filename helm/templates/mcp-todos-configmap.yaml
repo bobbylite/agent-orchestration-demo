@@ -11,6 +11,8 @@ data:
   OIDC_POST_LOGOUT_REDIRECT_URI: {{ .Values.mcpTodosServer.env.OIDC_POST_LOGOUT_REDIRECT_URI | quote }}
   AGENT_EXPECTED_AUDIENCE: {{ .Values.mcpTodosServer.env.AGENT_EXPECTED_AUDIENCE | quote }}
   MCP_AUTH_DOWNSTREAM_HEADER: {{ .Values.mcpTodosServer.env.MCP_AUTH_DOWNSTREAM_HEADER | quote }}
+  MCP_GATEWAY_ENFORCEMENT: {{ .Values.mcpTodosServer.env.MCP_GATEWAY_ENFORCEMENT | quote }}
+  GATEWAY_ENFORCEMENT_CLAIM: {{ .Values.mcpTodosServer.env.GATEWAY_ENFORCEMENT_CLAIM | quote }}
   ALLOWED_AGENT_CLIENT_ID: {{ .Values.mcpTodosServer.env.ALLOWED_AGENT_CLIENT_ID | quote }}
   TODOS_READ_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_READ_SCOPE | quote }}
   TODOS_WRITE_SCOPE: {{ .Values.mcpTodosServer.env.TODOS_WRITE_SCOPE | quote }}

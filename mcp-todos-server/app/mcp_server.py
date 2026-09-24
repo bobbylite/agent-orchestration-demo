@@ -35,8 +35,9 @@ def _call_bearer_token() -> str:
 
     - true (default, gateway mode): the token rides
       X-MCP-Downstream-Authorization — the outer Authorization header is the
-      AI Gateway's own credential, whose audience/scope would never verify
-      here, so it must not be mistaken for the delegated token.
+      gateway-injected enforcement JWT (app/gateway_gate.py verifies it
+      session-level when MCP_GATEWAY_ENFORCEMENT is on), so it must not be
+      mistaken for the delegated token, which is verified here per tool call.
     - false (direct mode): the standard Authorization header carries the
       delegated token (callers that bypass the gateway).
 

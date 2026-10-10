@@ -11,6 +11,8 @@ dependencies = [
     "joserfc>=1.0",
     "pydantic-settings>=2.5",
     "itsdangerous>=2.2",
+    "opentelemetry-api>=1.44",
+    "opentelemetry-sdk>=1.44",
     "agentorchestration-shared",
 ]
 

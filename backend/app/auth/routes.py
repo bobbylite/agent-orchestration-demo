@@ -6,8 +6,10 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from app.auth import oidc
+from app.auth import gateway_dcr, gateway_oidc, gateway_tokens, oidc
 from app.auth.agent_auth import client_credentials_grant, token_exchange
+from app.auth import ciba, ciba_store
+from app.auth.ciba import CibaError
 from app.auth.pkce import (
     OIDC_STATE_COOKIE,
     generate_pkce_pair,
@@ -17,7 +19,10 @@ from app.auth.pkce import (
 )
 from app.auth.session import (
     AGENT_TOKEN_COOKIE,
+    CIBA_TOKEN_COOKIE,
     EXCHANGED_TOKEN_COOKIE,
+    GATEWAY_STATE_COOKIE,
+    GATEWAY_TOKEN_COOKIE,
     SESSION_COOKIE,
     clear_cookie,
     read_cookie,
@@ -47,6 +52,29 @@ def _pingone_error_detail(exc: httpx.HTTPStatusError) -> str:
 
 def _redirect_uri(settings: Settings) -> str:
     return f"{settings.app_base_url}/api/auth/callback"
+
+
+def _gateway_redirect_uri(settings: Settings) -> str:
+    return settings.gateway_redirect_uri or f"{settings.app_base_url}/api/auth/gateway/callback"
+
+
+def _gateway_token_is_fresh(entry: dict, settings: Settings) -> bool:
+    try:
+        return float(entry.get("expires_at", 0)) > time.time() + settings.gateway_refresh_skew
+    except (TypeError, ValueError):
+        return False
+
+
+def _gateway_state_cookie(response: Response, payload: dict, settings: Settings) -> None:
+    response.set_cookie(
+        key=GATEWAY_STATE_COOKIE,
+        value=seal_state(payload, settings),
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=settings.app_base_url.startswith("https"),
+        path="/",
+    )
 
 
 @router.get("/login")
@@ -83,6 +111,112 @@ async def login(settings: Settings = Depends(get_settings)) -> RedirectResponse:
         return response
 
 
+@router.get("/gateway/login")
+async def gateway_login(request: Request, settings: Settings = Depends(get_settings)) -> RedirectResponse:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    if not session or not session.get("sub"):
+        raise HTTPException(status_code=401, detail="Sign in with PingOne first")
+    if not settings.gateway_configured:
+        raise HTTPException(status_code=400, detail="AI Gateway OAuth is not configured")
+    # Use THIS process's own registered client (see app/auth/gateway_dcr.py —
+    # registered at startup, kept for the process lifetime). ensure_client_
+    # registered re-runs only if startup registration failed or the client
+    # was flagged evicted, so this is normally zero network calls.
+    try:
+        with with_span("gateway.dcr.resolve") as span:
+            gateway_client_id = await gateway_dcr.ensure_client_registered(settings)
+            span.set_attribute("gateway.client_id", gateway_client_id)
+    except gateway_dcr.GatewayRegistrationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    verifier, challenge = generate_pkce_pair()
+    state = generate_token()
+    response = RedirectResponse(
+        gateway_oidc.authorization_url(
+            settings,
+            state=state,
+            code_challenge=challenge,
+            redirect_uri=_gateway_redirect_uri(settings),
+            client_id=gateway_client_id,
+        )
+    )
+    _gateway_state_cookie(
+        response,
+        {"state": state, "verifier": verifier, "sub": session["sub"], "client_id": gateway_client_id},
+        settings,
+    )
+    return response
+
+
+@router.get("/gateway/callback")
+async def gateway_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    raw_state = request.cookies.get(GATEWAY_STATE_COOKIE)
+    saved = unseal_state(raw_state, settings) if raw_state else None
+    if error or not code or not state or not saved or saved.get("state") != state or saved.get("sub") != (session or {}).get("sub"):
+        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    with with_span(
+        "gateway.login.callback",
+        {"gateway.auth_method": settings.gateway_client_auth_method},
+    ) as span:
+        # The client_id that started THIS flow (stored in the state cookie by
+        # /gateway/login) — not whatever the process currently holds, which
+        # a re-registration could have swapped mid-flight.
+        flow_client_id = saved.get("client_id") or gateway_dcr.current_client_id()
+        try:
+            tokens = await gateway_oidc.exchange_code(
+                settings,
+                code=code,
+                code_verifier=saved["verifier"],
+                redirect_uri=_gateway_redirect_uri(settings),
+                client_id=flow_client_id,
+            )
+            span.set_attribute("gateway.outcome", "ok")
+        except httpx.HTTPStatusError as exc:
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            # The gateway may have evicted this process's client between the
+            # authorize redirect and this callback. An authorization code is
+            # bound to the client that requested it, so this flow can't be
+            # salvaged — flag the client dead so the next login (or the
+            # silent-refresh ladder) recovers, and send the user back with
+            # the normal error redirect.
+            if "unknown client" in exc.response.text.lower():
+                gateway_dcr.mark_evicted()
+                span.set_attribute("gateway.failure_reason", "unknown_client")
+            return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+        except (httpx.HTTPError, RuntimeError) as exc:
+            span.set_attribute("gateway.outcome", "error")
+            span.set_attribute("gateway.failure_type", type(exc).__name__)
+            return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    if not tokens.get("access_token") or not session:
+        return RedirectResponse(f"{settings.frontend_origin}/?gateway_auth_error=1")
+    response = RedirectResponse(settings.frontend_origin)
+    clear_cookie(response, GATEWAY_STATE_COOKIE, settings)
+    set_sealed_cookie(
+        response,
+        GATEWAY_TOKEN_COOKIE,
+        {
+            "sub": session["sub"],
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens.get("refresh_token"),
+            "expires_at": time.time() + int(tokens.get("expires_in", 3600)),
+        },
+        settings,
+    )
+    # Persist BOTH tokens server-side too (access + refresh). The cookie
+    # above stays per-browser-session; this store is what lets invoke/telemetry
+    # keep working across access-token expiry via the silent-refresh ladder
+    # in app/auth/gateway_tokens.py, without another browser round-trip.
+    gateway_tokens.store_tokens(session["sub"], tokens)
+    return response
+
+
 @router.get("/callback")
 async def callback(
     request: Request,
@@ -114,7 +248,11 @@ async def callback(
         claims = await oidc.verify_id_token(metadata, settings, tokens["id_token"], nonce=saved["nonce"])
         span.set_attribute("identity.sub", claims.get("sub", ""))
 
-        response = RedirectResponse(settings.frontend_origin)
+        response = RedirectResponse(
+            f"{settings.app_base_url}/api/auth/gateway/login"
+            if settings.gateway_configured
+            else settings.frontend_origin
+        )
         clear_cookie(response, OIDC_STATE_COOKIE, settings)
         set_sealed_cookie(
             response,
@@ -159,12 +297,64 @@ async def logout(request: Request, settings: Settings = Depends(get_settings)) -
         clear_cookie(response, SESSION_COOKIE, settings)
         clear_cookie(response, AGENT_TOKEN_COOKIE, settings)
         clear_cookie(response, EXCHANGED_TOKEN_COOKIE, settings)
+        clear_cookie(response, CIBA_TOKEN_COOKIE, settings)
+        clear_cookie(response, GATEWAY_STATE_COOKIE, settings)
+        clear_cookie(response, GATEWAY_TOKEN_COOKIE, settings)
+        ciba_store.clear_for_session((session or {}).get("sub", ""))
+        if session and session.get("sub"):
+            # Also drop the server-side gateway token pair — logout means
+            # this identity's gateway grant is gone from this process.
+            gateway_tokens.drop(session["sub"])
         return response
 
 
+_CIBA_COOKIE_MAX_AGE = 60 * 60
 _EXCHANGED_COOKIE_MAX_AGE = 8 * 60 * 60  # matches SESSION_COOKIE; individual
 # tokens are re-verified against their own `exp` claim on every use anyway
 # (see agentorchestration_shared.verify_bearer_token), so this is just a ceiling.
+
+
+async def _mint_agent_token(request: Request, response: Response | None, settings: Settings, session: dict) -> str:
+    if not settings.agent_configured:
+        raise HTTPException(status_code=400, detail="Agent credentials are not configured")
+    with with_span("agent.authenticate", {"identity.sub": session.get("sub", "")}):
+        metadata = await oidc.get_metadata(settings)
+        with with_span("agent.client_credentials") as cc_span:
+            try:
+                actor_token = await client_credentials_grant(
+                    metadata.token_endpoint,
+                    client_id=settings.agent_client_id,
+                    client_secret=settings.agent_client_secret,
+                    scope=settings.agent_own_scope,
+                )
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(status_code=502, detail=f"PingOne rejected the agent's Client Credentials grant: {_pingone_error_detail(exc)}") from exc
+            cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
+            cc_span.set_attribute("oauth.scope", settings.agent_own_scope)
+            token_ledger.record("agent_own", actor_token["access_token"])
+        with with_span("agent.token_exchange") as te_span:
+            try:
+                delegated = await token_exchange(
+                    metadata.token_endpoint,
+                    client_id=settings.agent_delegation_client_id,
+                    client_secret=settings.agent_delegation_client_secret,
+                    subject_token=session["access_token"],
+                    actor_token=actor_token["access_token"],
+                    scope=settings.agent_delegation_scope,
+                )
+            except httpx.HTTPStatusError as exc:
+                raise HTTPException(status_code=502, detail=f"PingOne rejected the Token Exchange request: {_pingone_error_detail(exc)}") from exc
+            te_span.set_attribute("identity.sub", session.get("sub", ""))
+            te_span.set_attribute("identity.agent_client_id", settings.agent_delegation_client_id or "")
+            te_span.set_attribute("oauth.scope", settings.agent_delegation_scope)
+            token_ledger.record("delegation", delegated["access_token"])
+        if response is not None:
+            set_sealed_cookie(response, EXCHANGED_TOKEN_COOKIE, {
+            "sub": session.get("sub"), "client_id": settings.agent_delegation_client_id,
+            "access_token": delegated["access_token"], "scope": settings.agent_delegation_scope,
+            "issued_at": time.time(),
+        }, settings, max_age=_EXCHANGED_COOKIE_MAX_AGE)
+    return delegated["access_token"]
 
 
 @router.post("/agent-token")
@@ -183,86 +373,101 @@ async def agent_token(
     delegation credential (Token Exchange, `agent_delegation_scope`,
     audience = the Task Agent's URL).
     """
-    if not settings.agent_configured:
-        raise HTTPException(status_code=400, detail="Agent credentials are not configured")
-
     session = read_cookie(request, SESSION_COOKIE, settings)
     if not session or not session.get("access_token"):
         raise HTTPException(status_code=401, detail="Sign in with PingOne first")
-
-    with with_span("agent.authenticate", {"identity.sub": session.get("sub", "")}):
-        metadata = await oidc.get_metadata(settings)
-
-        with with_span("agent.client_credentials") as cc_span:
-            try:
-                actor_token = await client_credentials_grant(
-                    metadata.token_endpoint,
-                    client_id=settings.agent_client_id,
-                    client_secret=settings.agent_client_secret,
-                    scope=settings.agent_own_scope,
-                )
-            except httpx.HTTPStatusError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"PingOne rejected the agent's Client Credentials grant: {_pingone_error_detail(exc)}",
-                ) from exc
-            cc_span.set_attribute("identity.agent_client_id", settings.agent_client_id or "")
-            cc_span.set_attribute("oauth.scope", settings.agent_own_scope)
-            token_ledger.record("agent_own", actor_token["access_token"])
-
-        with with_span("agent.token_exchange") as te_span:
-            try:
-                # Deliberately a DIFFERENT PingOne worker app from the one
-                # above — the app authorized to perform Token Exchange
-                # isn't necessarily the same one that proves the agent's
-                # own identity in step 1.
-                delegated = await token_exchange(
-                    metadata.token_endpoint,
-                    client_id=settings.agent_delegation_client_id,
-                    client_secret=settings.agent_delegation_client_secret,
-                    subject_token=session["access_token"],
-                    actor_token=actor_token["access_token"],
-                    scope=settings.agent_delegation_scope,
-                )
-            except httpx.HTTPStatusError as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"PingOne rejected the Token Exchange request: {_pingone_error_detail(exc)}",
-                ) from exc
-            te_span.set_attribute("identity.sub", session.get("sub", ""))
-            te_span.set_attribute("identity.agent_client_id", settings.agent_delegation_client_id or "")
-            te_span.set_attribute("oauth.scope", settings.agent_delegation_scope)
-            token_ledger.record("delegation", delegated["access_token"])
-
-        set_sealed_cookie(
-            response,
-            EXCHANGED_TOKEN_COOKIE,
-            {
-                "sub": session.get("sub"),
-                "client_id": settings.agent_delegation_client_id,
-                "access_token": delegated["access_token"],
-                "scope": settings.agent_delegation_scope,
-                "issued_at": time.time(),
-            },
-            settings,
-            max_age=_EXCHANGED_COOKIE_MAX_AGE,
-        )
-
+    await _mint_agent_token(request, response, settings, session)
     return {"delegated": True}
+
+
+@router.post("/ciba/start")
+async def ciba_start(request: Request, settings: Settings = Depends(get_settings)) -> dict:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    if not session or not session.get("access_token") or not session.get("sub"):
+        raise HTTPException(status_code=401, detail="Sign in with PingOne first")
+    try:
+        started = await ciba.start(settings, login_hint=session.get("email") or session["sub"])
+    except CibaError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    item = ciba_store.create(
+        session_sub=session["sub"], session_token=session["access_token"], scope=required_scope,
+        auth_req_id=started["auth_req_id"], expires_in=started["expires_in"],
+    )
+    return {"approval_id": item.approval_id, "interval": item.interval, "expires_in": started["expires_in"]}
+
+
+@router.post("/ciba/poll")
+async def ciba_poll(request: Request, response: Response, approval_id: str, settings: Settings = Depends(get_settings)) -> dict:
+    session = read_cookie(request, SESSION_COOKIE, settings)
+    if not session or not session.get("access_token") or not session.get("sub"):
+        raise HTTPException(status_code=401, detail="Sign in with PingOne first")
+    item = ciba_store.get(approval_id)
+    if not item or not ciba_store.owns(item, session_sub=session["sub"], session_token=session["access_token"], scope=item.scope):
+        raise HTTPException(status_code=404, detail="CIBA approval not found")
+    async with item.lock:
+        if item.status == "expired":
+            ciba_store.remove(approval_id)
+            return {"status": "expired"}
+        if item.status == "approved":
+            return {"status": "approved"}
+        if time.monotonic() < item.next_poll_at:
+            return {"status": "pending", "retry_after": max(0.1, item.next_poll_at - time.monotonic())}
+        try:
+            status, token_body, slow_down = await ciba.poll(settings, item.auth_req_id)
+        except CibaError as exc:
+            item.status = "denied"
+            ciba_store.remove(approval_id)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        if status == "pending":
+            if slow_down:
+                item.interval = min(item.interval + slow_down, settings.ciba_max_poll_interval)
+            item.next_poll_at = time.monotonic() + item.interval
+            return {"status": "pending", "retry_after": item.interval}
+        if status == "terminal" or not token_body:
+            item.status = "denied"
+            ciba_store.remove(approval_id)
+            return {"status": "denied"}
+        item.status = "approved"
+        item.token = token_body["access_token"]
+        set_sealed_cookie(response, CIBA_TOKEN_COOKIE, {"access_token": item.token, "sub": session["sub"], "issued_at": time.time()}, settings, max_age=min(_CIBA_COOKIE_MAX_AGE, int(token_body.get("expires_in", _CIBA_COOKIE_MAX_AGE))))
+        await _mint_agent_token(request, response, settings, session)
+        ciba_store.remove(approval_id)
+        return {"status": "approved"}
 
 
 @router.get("/me")
 async def me(request: Request, settings: Settings = Depends(get_settings)) -> dict:
     session = read_cookie(request, SESSION_COOKIE, settings)
     delegated = read_cookie(request, EXCHANGED_TOKEN_COOKIE, settings)
+    gateway = read_cookie(request, GATEWAY_TOKEN_COOKIE, settings)
+    sub = (session or {}).get("sub")
+    gateway_authenticated = bool(
+        gateway
+        and gateway.get("access_token")
+        and gateway.get("sub") == sub
+        and _gateway_token_is_fresh(gateway, settings)
+    )
+    # Server-side store view: a user whose access token expired but whose
+    # refresh token is still good counts as authenticated — resolve (which
+    # silently refreshes) will succeed without a browser round-trip. The
+    # 2-second /me poll never triggers the refresh itself (no network cost
+    # per poll); it only reports what the ladder WOULD do.
+    server_store = gateway_tokens.status(sub) if sub else {"access_fresh": False, "refresh_available": False}
+    gateway_can_resolve = gateway_authenticated or bool(
+        settings.gateway_configured and session and server_store.get("refresh_available")
+    )
     return {
         "oidc_enabled": settings.oidc_configured,
         "agent_enabled": settings.agent_configured,
         "signed_in": bool(session),
-        "sub": (session or {}).get("sub"),
+        "sub": sub,
         "email": (session or {}).get("email"),
         "name": (session or {}).get("name"),
         "agent_delegated": bool(delegated),
+        "gateway_enabled": settings.gateway_configured,
+        "gateway_authenticated": gateway_authenticated,
+        "gateway_can_resolve": gateway_can_resolve,
+        "gateway_auth_required": bool(settings.gateway_configured and session and not gateway_can_resolve),
     }
 
 

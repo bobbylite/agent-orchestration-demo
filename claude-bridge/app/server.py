@@ -61,11 +61,10 @@ async def ask_task_agent_read(request: str) -> str:
 
 @mcp.tool
 async def ask_task_agent_write(request: str) -> str:
-    """Delegate a WRITE request to the Task Agent — use this for adding a
-    new todo or marking one complete, or any other change to the user's
-    todo list. Describe what to do in plain language (e.g. "mark 'buy milk'
-    as complete") — you do not need a todo's internal id first; the Task
-    Agent looks it up itself."""
+    """Delegate a WRITE request to the Task Agent — use this for adding,
+    completing, reopening, or explicitly deleting a todo. Describe what to
+    do in plain language (e.g. "delete 'buy milk'") — you do not need a todo's
+    internal id first; the Task Agent looks it up itself."""
     return await _call_task_agent(request)
 
 

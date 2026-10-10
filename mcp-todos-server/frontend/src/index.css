@@ -91,6 +91,7 @@ body,
 
 body {
   margin: 0;
+  overscroll-behavior: none;
   background-color: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
@@ -99,6 +100,21 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* One consistent, branded focus ring everywhere, rather than each

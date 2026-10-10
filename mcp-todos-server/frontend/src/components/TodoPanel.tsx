@@ -54,12 +54,36 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
   }
 
   async function handleComplete(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
     setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: true } : t)))
     try {
       await api.completeTodo(id)
       onActivity()
     } catch {
-      // best-effort; a manual refresh reconciles if this actually failed
+      if (previous) setTodos((prev) => prev.map((t) => (t.id === id ? previous : t)))
+    }
+  }
+
+  async function handleReopen(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
+    setTodos((prev) => prev.map((t) => (t.id === id ? { ...t, done: false } : t)))
+    try {
+      await api.reopenTodo(id)
+      onActivity()
+    } catch {
+      if (previous) setTodos((prev) => prev.map((t) => (t.id === id ? previous : t)))
+    }
+  }
+
+  async function handleDelete(id: string) {
+    const previous = todos.find((todo) => todo.id === id)
+    if (!previous || !window.confirm(`Delete “${previous.text}”? This cannot be undone.`)) return
+    setTodos((prev) => prev.filter((todo) => todo.id !== id))
+    try {
+      await api.deleteTodo(id)
+      onActivity()
+    } catch {
+      setTodos((prev) => (prev.some((todo) => todo.id === id) ? prev : [...prev, previous]))
     }
   }
 
@@ -82,7 +106,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-3.5 sm:px-5">
         <h2 className="text-xs font-semibold tracking-wide text-ink-muted uppercase">Todos</h2>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
@@ -92,7 +116,7 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-5">
         {todos.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             <p className="text-sm text-ink-muted">No todos yet.</p>
@@ -101,18 +125,18 @@ export function TodoPanel({ signedIn, onActivity }: Props) {
         ) : (
           <ul className="flex flex-col gap-3">
             {todos.map((todo) => (
-              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} />
+              <TodoItem key={todo.id} todo={todo} onComplete={handleComplete} onReopen={handleReopen} onDelete={handleDelete} />
             ))}
           </ul>
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex shrink-0 gap-2.5 border-t border-border p-4">
+      <form onSubmit={handleSubmit} className="flex shrink-0 gap-2.5 border-t border-border p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4">
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           placeholder="Add a todo…"
-          className="flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none"
+          className="min-w-0 min-h-11 flex-1 rounded-md border border-border bg-canvas-raised px-4 py-2.5 text-sm text-ink placeholder:text-ink-muted transition focus:border-brand focus:outline-none"
         />
         <button
           type="submit"

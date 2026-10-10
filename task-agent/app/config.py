@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic import Field
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     # granted scope on every MCP tool call.
     todos_read_scope: str = Field(default="todos:read")
     todos_write_scope: str = Field(default="todos:write")
+    todos_delete_scope: str = Field(default="todos:delete")
 
     # PingOne Authorize decision endpoint. The worker app is used only to
     # authenticate the decision request; the delegated token is supplied to
@@ -74,6 +76,11 @@ class Settings(BaseSettings):
     authorize_delegate_tasks_policy_value: str = Field(default="true")
     authorize_task_policy_parameter: str = Field(default="evaluateTaskPolicy")
     authorize_task_policy_value: str = Field(default="true")
+    authorize_ciba_token_parameter: str = Field(default="cibaToken")
+    authorize_ciba_flow_parameter: str = Field(default="cibaFlow")
+    authorize_ciba_no_token_value: str = Field(default="false")
+    ciba_header_name: str = Field(default="X-CIBA-Token")
+    ciba_required_marker: str = Field(default="ciba_required")
 
     anthropic_api_key: str | None = Field(default=None)
     agent_model: str = Field(default="claude-sonnet-5")
@@ -125,7 +132,40 @@ class Settings(BaseSettings):
     # uses judge_model instead, with its own groq default — see above).
     groq_model: str | None = Field(default=None)
 
-    mcp_todos_url: str = Field(default="http://localhost:9000/mcp")
+    # LangSmith tracing — purely additive to this service's own OpenTelemetry
+    # spans (see CLAUDE.md "OpenTelemetry is the product"), off by default.
+    # Read directly by langchain-core's own tracer via os.environ (see
+    # get_settings() below) — no LangSmith code is imported or called directly.
+    langsmith_tracing: bool = Field(default=False)
+    langsmith_endpoint: str = Field(default="https://api.smith.langchain.com")
+    langsmith_api_key: str | None = Field(default=None)
+    langsmith_project: str = Field(default="Todos")
+
+    # The AI gateway is used for authenticated MCP schema discovery. The
+    # bearer is request-scoped and arrives over the internal A2A hop; it is
+    # never read from static service configuration.
+    mcp_gateway_url: str = Field(
+        default="https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/mcp"
+    )
+
+    # False = "direct mode": skip the AI Gateway entirely and talk to
+    # mcp-todos-server's own /mcp endpoint (mcp_direct_url), requiring no
+    # gateway bearer and sending only X-MCP-Downstream-Authorization (the
+    # fresh per-call todos-scoped token, verified by the MCP server as
+    # usual). mcp-todos-server's MCP_AUTH_DOWNSTREAM_HEADER=true mode already
+    # supports exactly this caller shape. True (default) = today's gateway
+    # path. Lets the whole system run locally without the deployed gateway.
+    gateway_required: bool = Field(default=True)
+    # MCP endpoint used in direct mode (gateway_required=false). Kept separate
+    # from mcp_gateway_url so toggling modes is a one-boolean flip.
+    mcp_direct_url: str = Field(default="http://localhost:9000/mcp")
+
+    @property
+    def mcp_endpoint_url(self) -> str:
+        """Where MCP discovery/calls actually go in the current mode — used
+        for connections, span attributes, and the gateway audit trail so
+        everything reports the real destination."""
+        return self.mcp_direct_url if not self.gateway_required else self.mcp_gateway_url
 
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=9010)
@@ -134,4 +174,11 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.langsmith_tracing:
+        os.environ.setdefault("LANGSMITH_TRACING", "true")
+        os.environ.setdefault("LANGSMITH_ENDPOINT", settings.langsmith_endpoint)
+        os.environ.setdefault("LANGSMITH_PROJECT", settings.langsmith_project)
+        if settings.langsmith_api_key:
+            os.environ.setdefault("LANGSMITH_API_KEY", settings.langsmith_api_key)
+    return settings

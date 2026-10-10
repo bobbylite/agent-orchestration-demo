@@ -1,6 +1,6 @@
 import type { TelemetrySpan } from "../../lib/api"
 
-export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge" | "desktop"
+export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "judge" | "desktop" | "gateway"
 
 /** OTel resource `service.name` values — see backend/app/telemetry.py and
  * task-agent/app/telemetry.py's RecordingSpanProcessor, which both stamp
@@ -9,6 +9,7 @@ export type NodeKind = "browser" | "idp" | "agent" | "specialist" | "data" | "ju
  * that TelemetryPanel merges both processes' spans into one array. */
 export const SERVICE_CHAT_AGENT = "agentorchestration-console-backend"
 export const SERVICE_TASK_AGENT = "agentorchestration-console-task-agent"
+export const SERVICE_MCP_TODOS = "agentorchestration-console-mcp-todos-server"
 
 export interface StoryNodeData {
   [key: string]: unknown
@@ -58,7 +59,7 @@ export const STORY_NODES: Array<{
       title: "PingOne",
       subtitle: "OIDC Identity Provider — the one thing both front doors trust",
       kind: "idp",
-      spanNames: ["oidc.login.redirect", "oidc.login.callback", "agent.client_credentials", "agent.token_exchange"],
+      spanNames: ["oidc.login.redirect", "oidc.login.callback", "gateway.login.callback", "agent.client_credentials", "agent.token_exchange"],
       service: SERVICE_CHAT_AGENT,
     },
   },
@@ -85,18 +86,45 @@ export const STORY_NODES: Array<{
     },
   },
   {
-    id: "mcp",
+    id: "authorize",
+    position: { x: 1260, y: 20 },
+    data: {
+      title: "PingOne Authorize",
+      // Same kind/icon as "pingone" below — deliberately: this genuinely
+      // is the same PingOne product, just a different capability (policy
+      // decisions, not identity/tokens). task-agent/app/policy.py is the
+      // only caller today — three decision-endpoint calls, one per span.
+      subtitle: "Decision Endpoint — task-agent/app/policy.py",
+      kind: "idp",
+      spanNames: ["authorize.evaluator_optimizer", "authorize.task_policy", "authorize.delegation_policy"],
+      service: SERVICE_TASK_AGENT,
+    },
+  },
+  {
+    id: "gateway",
     position: { x: 1260, y: 300 },
+    data: {
+      title: "AI Gateway",
+      subtitle: "Policy - PingOne Privilege AI Gateway — proxies every MCP request",
+      kind: "gateway",
+      spanNames: ["gateway.mcp_discovery", "gateway.mcp_tool_call"],
+      service: SERVICE_TASK_AGENT,
+    },
+  },
+  {
+    id: "mcp",
+    position: { x: 1660, y: 300 },
     data: {
       title: "MCP Todos Server",
       subtitle: "Tool + data + OBO audit log",
       kind: "data",
-      spanNames: [],
+      spanNames: ["mcp.tool_call", "authorize.mcp_tool_call"],
+      service: SERVICE_MCP_TODOS,
     },
   },
   {
     id: "audit",
-    position: { x: 1260, y: 540 },
+    position: { x: 1660, y: 540 },
     data: {
       title: "OBO Audit Log",
       subtitle: "mcp-todos-server/app/audit.py",
@@ -228,14 +256,66 @@ export const STORY_EDGES: Array<{
     meta: { spanName: "inbound_auth.verify", service: SERVICE_TASK_AGENT, attributeKeys: ["identity.agent_client_id"] },
   },
   {
-    id: "e-mcp",
+    id: "e-authorize-budget",
     source: "taskagent",
-    target: "mcp",
+    target: "authorize",
+    sourceHandle: "top3",
+    targetHandle: "bottom",
+    label: "Judge retry budget — evaluator-optimizer policy",
+    detail: "Read once per task, before task_assistant's first attempt — the retry budget the judge loop gets.",
+    meta: {
+      spanName: "authorize.evaluator_optimizer",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.result", "policy.budget"],
+    },
+  },
+  {
+    id: "e-authorize-delegation-policy",
+    source: "taskagent",
+    target: "authorize",
+    sourceHandle: "top4",
+    targetHandle: "bottom2",
+    label: "Delegation policy — before any MCP token exchange",
+    detail: "Local ACL, then PingOne Authorize's group-access decision on the delegated user.",
+    meta: {
+      spanName: "authorize.delegation_policy",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.tool", "policy.result"],
+    },
+  },
+  {
+    id: "e-authorize-task-policy",
+    source: "taskagent",
+    target: "authorize",
+    sourceHandle: "top5",
+    targetHandle: "bottom3",
+    label: "Task policy — after the MCP-scoped exchange, before the call",
+    detail: "Authorizes the freshly exchanged todos:read/todos:write token itself, fresh per tool call.",
+    meta: {
+      spanName: "authorize.task_policy",
+      service: SERVICE_TASK_AGENT,
+      attributeKeys: ["policy.tool", "policy.result"],
+    },
+  },
+  {
+    id: "e-gateway",
+    source: "taskagent",
+    target: "gateway",
     sourceHandle: "right",
     targetHandle: "left",
-    label: "5. MCP tool call — forwards the SAME token one hop further",
-    detail: "list_todos / add_todo / complete_todo — rebuilt fresh per task, not a cached connection.",
-    meta: {},
+    label: "5. MCP request — gateway bearer + downstream bearer",
+    detail: "Task Agent authenticates to PingOne Privilege AI Gateway with Authorization, while carrying the fresh todos token in X-MCP-Downstream-Authorization.",
+    meta: { spanName: "gateway.mcp_tool_call", service: SERVICE_TASK_AGENT, attributeKeys: ["gateway.outcome", "mcp.tool"] },
+  },
+  {
+    id: "e-mcp",
+    source: "gateway",
+    target: "mcp",
+    sourceHandle: "right",
+    targetHandle: "left2",
+    label: "6. Gateway proxies the MCP tool call",
+    detail: "The gateway routes the request to MCP Todos; the downstream token remains the credential the MCP resource verifies.",
+    meta: { spanName: "mcp.tool_call", service: SERVICE_MCP_TODOS, attributeKeys: ["mcp.tool", "mcp.outcome"] },
   },
   {
     id: "e-verify-mcp",
@@ -246,6 +326,16 @@ export const STORY_EDGES: Array<{
     label: "Inbound auth — independently re-verifies, a third time",
     detail: "mcp-todos-server/app/mcp_server.py — plus its own policy ACL, not trusting task-agent's gate.",
     meta: {},
+  },
+  {
+    id: "e-mcp-authorize",
+    source: "mcp",
+    target: "authorize",
+    sourceHandle: "top2",
+    targetHandle: "bottom3",
+    label: "MCP tool PDP — evaluateMcpToolCall",
+    detail: "MCP sends the exchanged token as AccessToken plus mcpToolName; only PERMIT allows the call.",
+    meta: { spanName: "authorize.mcp_tool_call", service: SERVICE_MCP_TODOS, attributeKeys: ["policy.tool", "policy.result"] },
   },
   {
     id: "e-audit",
@@ -369,10 +459,27 @@ export const NODE_HANDLES: Record<string, HandleSpec[]> = {
     // verify) so the incoming edge from above doesn't share a connection
     // point with that outgoing one.
     { id: "top2", type: "target", position: "top", offset: "20%" },
+    // Three new source handles, one per PingOne Authorize decision call —
+    // clustered between top2 (20%) and top (50%) so they read as a
+    // distinct group without crossing either existing top-side edge.
+    { id: "top3", type: "source", position: "top", offset: "30%" },
+    { id: "top4", type: "source", position: "top", offset: "37%" },
+    { id: "top5", type: "source", position: "top", offset: "44%" },
+  ],
+  authorize: [
+    { id: "bottom", type: "target", position: "bottom", offset: "30%" },
+    { id: "bottom2", type: "target", position: "bottom", offset: "50%" },
+    { id: "bottom3", type: "target", position: "bottom", offset: "70%" },
+  ],
+  gateway: [
+    { id: "left", type: "target", position: "left", offset: "50%" },
+    { id: "right", type: "source", position: "right", offset: "50%" },
   ],
   mcp: [
-    { id: "left", type: "target", position: "left", offset: "50%" },
-    { id: "top", type: "source", position: "top", offset: "50%" },
+    { id: "left", type: "target", position: "left", offset: "35%" },
+    { id: "left2", type: "target", position: "left", offset: "65%" },
+    { id: "top", type: "source", position: "top", offset: "35%" },
+    { id: "top2", type: "source", position: "top", offset: "65%" },
     { id: "bottom", type: "source", position: "bottom", offset: "50%" },
   ],
   audit: [{ id: "top", type: "target", position: "top", offset: "50%" }],

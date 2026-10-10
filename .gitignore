@@ -7,6 +7,7 @@ __pycache__/
 .env
 **/.env
 .env.local
+.env.bak
 **/.env.local
 uv.lock.bak
 
@@ -16,3 +17,5 @@ frontend/dist/
 
 # OS
 .DS_Store
+helm/values-pingidentity.yaml
+helm/values.yaml

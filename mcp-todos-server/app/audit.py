@@ -61,3 +61,9 @@ def record(
 
 def get_recent() -> list[dict[str, Any]]:
     return list(reversed(_entries))
+
+
+def clear() -> int:
+    count = len(_entries)
+    _entries.clear()
+    return count

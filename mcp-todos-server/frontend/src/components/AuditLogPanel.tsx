@@ -14,14 +14,17 @@ interface Props {
 export function AuditLogPanel({ signedIn, refreshSignal }: Props) {
   const [entries, setEntries] = useState<AuditEntry[]>([])
   const [refreshing, setRefreshing] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setRefreshing(true)
+    setError(null)
     try {
       const { entries: latest } = await api.getAudit()
       setEntries(latest)
     } catch {
-      // best-effort; the user can retry via the refresh button
+      setError("Could not load the audit log.")
     } finally {
       setRefreshing(false)
     }
@@ -55,10 +58,31 @@ export function AuditLogPanel({ signedIn, refreshSignal }: Props) {
           <span className="rounded-full bg-code-bg px-2 py-0.5 font-mono text-[10px] text-ink-muted">
             {entries.length}
           </span>
+          <button
+            type="button"
+            disabled={clearing || entries.length === 0}
+            onClick={async () => {
+              if (!window.confirm("Clear the audit log? This removes the in-memory history for this service.")) return
+              setClearing(true)
+              setError(null)
+              try {
+                await api.clearAudit()
+                setEntries([])
+              } catch {
+                setError("Could not clear the audit log.")
+              } finally {
+                setClearing(false)
+              }
+            }}
+            className="rounded-md border border-border bg-canvas-raised px-2.5 py-1 text-[11px] font-semibold text-ink-muted transition hover:bg-code-bg disabled:opacity-50"
+          >
+            {clearing ? "Clearing…" : "Clear"}
+          </button>
           <RefreshButton onClick={refresh} refreshing={refreshing} label="Refresh audit log" />
         </div>
       </div>
 
+      {error && <p className="px-5 pt-3 text-xs text-danger" role="alert">{error}</p>}
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {entries.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">

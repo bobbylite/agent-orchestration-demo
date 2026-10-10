@@ -183,9 +183,10 @@ into the tool-execution hook (see "RFC 8693 chained delegation" below):
 - `task_assistant` — its own Claude call, reasons about which MCP tool to
   invoke (`list_todos`/`add_todo`/`complete_todo`). Tools are fetched from
   `mcp-todos-server/` via `langchain_mcp_adapters.MultiServerMCPClient`
-  once per task **purely for their schemas** (`tools/list` needs no auth)
-  — bound to the LLM the same way as the Chat Agent's tools, but never
-  actually invoked through that connection.
+  once per task **purely for their schemas**, through the configured AI
+  gateway URL with its injected discovery bearer — bound to the LLM the same
+  way as the Chat Agent's tools, but never actually invoked through that
+  connection.
 - `execute_tool` — a `ToolNode` whose `awrap_tool_call` hook
   (`_scoped_tool_call`) does full custom dispatch, not just a gate: policy
   check, then this service's own delegation chain (Client Credentials +
@@ -605,6 +606,50 @@ in the Task Agent's graph" above) — those now key off the real
 `judge.evaluate` span instead of always rendering dashed/"not aggregated
 here."
 
+## LangSmith tracing (optional, additive to OpenTelemetry) (added 2026-08-18)
+
+Both `backend/` and `task-agent/` can optionally trace every LLM call their
+graph makes to LangSmith — this is **additive to, not a replacement for**,
+the OpenTelemetry story above. OTel's `RecordingSpanProcessor`/Telemetry
+panel exists for live security narration during a demo (auth/delegation
+spans); LangSmith gives LLM-call-level detail (prompts, token usage,
+latency, tool-call traces) that OTel's custom spans deliberately don't
+carry. Both run independently and neither depends on the other.
+
+**Purely `os.environ`-driven — no `langsmith` import anywhere in
+application code, no `graph.py` changes.** `langchain-core`'s global
+callback machinery reads `LANGSMITH_TRACING`/`LANGSMITH_ENDPOINT`/
+`LANGSMITH_API_KEY`/`LANGSMITH_PROJECT` from `os.environ` lazily, per
+`.ainvoke()` call — not at import time, unlike the
+`OTEL_INSTRUMENTATION_A2A_SDK_ENABLED` gotcha above. Both
+`backend/app/config.py` and `task-agent/app/config.py` gained four new
+`Settings` fields (`langsmith_tracing`, `langsmith_endpoint`,
+`langsmith_api_key`, `langsmith_project`) and `get_settings()` itself now
+does the `os.environ.setdefault(...)` propagation (guarded by
+`langsmith_tracing`) — deliberately placed there rather than in either
+`main.py`, since both `main.py` files already carry one real,
+import-order-sensitive `os.environ` gotcha and this isn't one; keeping it
+out of `main.py` avoids it being misread as another one.
+
+Both services share one LangSmith project (`"Todos"`, matching
+`LANGSMITH_PROJECT`) by convention — just matching env var values, no
+code-level coupling.
+
+**Known limitation: no cross-service trace correlation.** The Chat Agent →
+Task Agent hop is a real A2A HTTP/JSON-RPC call, not an in-process
+LangChain `Runnable` composition, so LangSmith trace context does not
+propagate across it. A single delegated request produces *two independent
+top-level traces* in the `"Todos"` project — one from `backend`'s
+`assistant` node, one from `task-agent`'s `task_assistant`/`judge` nodes —
+not one merged tree. Propagating a real trace/parent-run header through
+the A2A call (similar in spirit to how `agent_client_id` is threaded
+today) would fix this but wasn't asked for; treat it as a legitimate
+future enhancement, not a bug.
+
+Default off (`LANGSMITH_TRACING=false` in both `.env.example` files) — a
+deployment that never sets this needs zero changes and sees zero behavior
+difference.
+
 ## MCP server: its own UI, PingOne SSO, and an OBO audit log (2026-08-15)
 
 `mcp-todos-server/` stopped being a bare, unauthenticated `fastmcp`
@@ -651,10 +696,15 @@ not a bug.
 
 **mcp-todos-server now receives a token task-agent minted itself, not one
 forwarded unchanged.** Superseded by the 2026-08-16 redesign above:
-`task-agent/app/graph.py`'s MCP tools are fetched once per task purely for
-schemas (no auth needed for `tools/list`); the actual, freshly-authorized
-connection is built per tool call inside `_scoped_tool_call`, using a
-token from task-agent's *own* RFC 8693 exchange (step 4 in the chain
+`task-agent/app/graph.py`'s MCP tools are fetched and invoked through the
+configured AI gateway using the request-scoped gateway bearer in
+`Authorization` and the fresh todos-scoped bearer in
+`X-MCP-Downstream-Authorization`; the gateway preserves the sidecar header
+upstream, and mcp-todos-server verifies that token rather than the gateway
+bearer. The request-scoped gateway token is forwarded over the internal A2A
+hop; the freshly-authorized connection is built per tool call inside
+`_scoped_tool_call`, using a token
+from task-agent's *own* RFC 8693 exchange (step 4 in the chain
 above) — not a header carried over from the Chat Agent. `mcp-todos-server`
 still independently re-verifies whatever it receives, same as always;
 what changed is *whose* exchange produced it.
@@ -747,6 +797,23 @@ has these settings at all).
 
 ## Known gotchas (all previously hit — don't re-debug these)
 
+- **`task-agent/app/policy.py`'s three PingOne Authorize calls used to
+  re-mint a fresh worker Client Credentials token every single task**
+  (via a task-scoped `actor_cache`), which was real, avoidable load on
+  PingOne and contributed to hitting a `REQUEST_LIMITED` rate limit under
+  rapid demo use — confirmed 2026-08-19. Fixed by moving the worker-token
+  cache to process scope (`policy.py`'s `_worker_cache` module dict,
+  `_get_worker_token()`, refreshed only within 30s of real expiry) since
+  the worker app's own identity doesn't vary per task, unlike the
+  Authorize *decision* itself, which is still requested fresh every call
+  (`_post_decision()`) — never cache the decision, only the credential
+  used to ask. `_post_decision()` also retries a `429` up to twice with
+  backoff (honoring `Retry-After` when PingOne sends one) before failing
+  closed, same as any other upstream failure. This dropped `actor_cache`
+  entirely from `evaluate_judge_budget`/`check_task_policy`/
+  `check_with_authorize`'s signatures — it's still used elsewhere in
+  `task-agent/app/graph.py` for the *separate* task-agent-own/MCP-scoped
+  token caching, untouched by this fix.
 - **`a2a-sdk` self-instruments onto any registered OTel `TracerProvider`**
   — `EventQueue`/request-handler/client-transport methods start emitting
   spans the moment `init_telemetry()` registers a real provider, flooding
@@ -856,7 +923,17 @@ has these settings at all).
   it's now a two-service match, not three. `task-agent/app/graph.py`
   requests one of these via its own Token Exchange per tool call, and
   `mcp-todos-server/app/policy.py` checks the resulting token's `scope`
-  claim against its own copy.
+  claim against its own copy. Schema discovery and actual tool calls use the gateway endpoint
+  configured by `MCP_GATEWAY_URL` and authenticated with the user's
+  request-scoped gateway OAuth credential forwarded over A2A. Actual calls
+  carry the fresh todos-scoped token in
+  `X-MCP-Downstream-Authorization`, while `Authorization` remains the
+  gateway credential. The Task Agent emits caller-side
+  `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans; the external
+  gateway is not a local process and has no ring buffer of its own. The
+  frontend's AI Gateway inspector reads the Task Agent's bounded
+  `/gateway/insights` diagnostic surface for real discovered tools and safe
+  policy outcomes; it is never an authorization source of truth.
 - **The `agent_client_id` custom claim, not `client_id`, is what every
   policy ACL in this repo checks identity against** — `client_id` on an
   exchanged token is just whichever PingOne app authenticated *that*
@@ -872,8 +949,10 @@ has these settings at all).
   inside a bigger FastAPI app (`mcp-todos-server/app/main.py`) — otherwise
   the streamable-http session manager never starts and every MCP call
   hangs/fails. `get_http_request()` (from `fastmcp.server.dependencies`)
-  is how an `@mcp.tool` function reads the raw `Authorization` header
-  without needing an explicit `ctx: Context` parameter.
+  is how an `@mcp.tool` function reads the raw
+  `X-MCP-Downstream-Authorization` header without needing an explicit
+  `ctx: Context` parameter. The outer `Authorization` header belongs to the
+  AI Gateway; human UI routes remain session-cookie authenticated.
 - **`[project.scripts]` entry points don't get installed when
   `[tool.uv].package = false`** (every service in this repo sets that,
   including `claude-bridge/`) — there's no build/install step to place the
@@ -995,6 +1074,153 @@ real todo data shape (text + done only — **no** due date/priority/tags/
 delete, so the model doesn't invent or promise unsupported fields), and a
 note on why narrating the delegation is in-character for this demo. Add
 it via Claude Desktop's Skills settings, pointed at that folder.
+
+## AI Gateway DCR clients are ephemeral — startup registration + silent refresh (added 2026-09-02)
+
+The deployed AI Gateway (`https://rluisi-agentless-mcpgw.ping-devops.com`,
+namespace `ping-devops-robertluisi`, Helm chart
+`~/projects/devops/mcpgw/agentless-mcpgw/`, image `public.ecr.aws/s7q1z8z4/
+privilege-aigw`, codebase `github.com/procyonai/orion`) forgets its RFC 7591
+dynamically-registered OAuth clients on an internal schedule that is NOT
+tied to gateway restarts — confirmed live 2026-09-01: the gateway pod had
+**0 restarts across 5+ days** while a previously working `client_id` got
+`400 Unknown client` from `/authorize` (gateway log:
+`[mcpgw] authorize for unregistered client_id "..."; rejecting`,
+`server.go:517`). In-memory registry, closed-source `mcpgw` binary,
+undocumented eviction policy; the gateway's log buffer only retains ~11
+hours, so evictions can't be correlated with registrations from outside.
+Do **not** re-derive this — the older "gateway restarted and lost its
+store" explanation is disproven.
+
+**The backend now treats `GATEWAY_CLIENT_ID` as a fallback seed, not the
+source of truth.** Two modules, both in `backend/app/auth/`:
+
+- **`gateway_dcr.py`** — registers ONE client per process:
+  `main.py`'s lifespan calls `ensure_client_registered()` at startup (only
+  when `gateway_configured`; failure is logged + non-fatal, retried lazily
+  from the first gateway login), and that client is kept for the process's
+  entire lifetime. `/gateway/login` uses the same id (zero network on the
+  happy path); `mark_evicted()` flags it when an `unknown client` response
+  is seen; `ensure_client_registered(force=True)` then mints a replacement.
+  Registration payload (`REGISTRATION_PAYLOAD`) covers BOTH the local and
+  deployed callback URIs, public client (`token_endpoint_auth_method:
+  none`), grants `authorization_code` + `refresh_token`.
+- **`gateway_tokens.py`** — server-side per-`sub` store of the gateway
+  token pair. `/gateway/callback` persists BOTH tokens here (access, 1 h;
+  refresh, 30 days — refresh-token support was enabled on the gateway
+  2026-09-02; response carries `refresh_token_expires_in`) in addition to
+  the encrypted browser cookie. The invoke route resolves its gateway
+  token through `resolve_access_token()`'s ladder: fresh stored access
+  token → silent `refresh_token` grant → on unknown-client, re-register
+  the client and retry the refresh once against the new client (usually
+  dead — refresh tokens die with their client — but one cheap call) →
+  `None`, which surfaces as the existing `gateway_auth_required` stream
+  error (interactive re-login is now the LAST resort, not the default
+  recovery). `/me` reports `gateway_can_resolve` (cookie-fresh OR a
+  refresh token is available server-side) so the UI doesn't demand a
+  re-login while a silent refresh would still succeed; the 2s `/me` poll
+  never triggers the refresh itself. Logout drops the store entry.
+
+- `/gateway/callback` pins the token exchange to the `client_id` saved in
+  the flow's state cookie (the one that started THIS flow — a concurrent
+  re-registration must not swap it mid-flight); an `unknown client`
+  rejection there calls `gateway_dcr.mark_evicted()` and redirects with
+  the normal `gateway_auth_error=1` (the code is bound to the dead client
+  and cannot be salvaged; the NEXT login starts from a fresh client).
+- `gateway_oidc.authorization_url()/exchange_code()/refresh_token()` all
+  take an optional `client_id` override for this threading.
+- `GATEWAY_REGISTRATION_ENDPOINT` (Settings field, in `.env.example` +
+  helm values + backend-configmap template) points at
+  `/todos-mcp-server/register`. All DCR/refresh calls use `verify=False`
+  because the gateway presents a self-signed cert in this environment
+  (same reason the diagnosis skill's curl uses `-k`); every other gateway
+  call goes through the browser or an authorized session.
+
+## Configurable AI Gateway bypass — `GATEWAY_REQUIRED` (added 2026-09-18)
+
+`task-agent/.env`'s `GATEWAY_REQUIRED=false` ("direct mode") makes the
+Task Agent talk straight to `mcp-todos-server`'s own `/mcp` endpoint
+(`MCP_DIRECT_URL`, default `http://localhost:9000/mcp`) instead of the
+deployed AI Gateway — no gateway bearer required or sent, so the whole
+system can be demoed/tested with zero calls to
+`rluisi-agentless-mcpgw.ping-devops.com`. Toggling back is the same one
+boolean (the two URLs are separate settings on purpose). `Settings.mcp_endpoint_url`
+(`task-agent/app/config.py`) resolves which endpoint is live; spans,
+`gateway_audit` entries, and `/gateway/insights` all report the real
+destination through it, so the frontend's AiGatewayPanel/diagram keep
+working unchanged (same span names, just a local URL).
+
+**Direct mode needs three env toggles now** (the third added 2026-09-24,
+see "AI Gateway enforcement" below): `mcp-todos-server/.env`'s
+`MCP_GATEWAY_ENFORCEMENT=false` — without it the session-level
+`/mcp` gate (app/gateway_gate.py) rejects every direct call, including
+`tools/list`, because a direct caller carries no gateway-injected
+enforcement JWT — plus `task-agent/.env`'s `GATEWAY_REQUIRED=false`, and
+`backend/.env`: comment out the `GATEWAY_*` block → `gateway_configured`
+False → no startup DCR, no SSE gateway gate, `gateway_enabled:false` in
+`/me`. With enforcement still on, direct mode fails at discovery with a
+readable 401-derived message (task-agent's `_find_http_status_error`
+unwraps it; AiGatewayPanel shows a `policy_denied` activity). All
+PingOne auth is untouched in either mode — inbound auth, the RFC 8693
+chain, the per-tool-call scoped exchange (step 4), policy ACLs, the
+Authorize PDP, and CIBA all still run exactly as before; only the
+gateway boundary is rerouted. Side effect: `claude-bridge/` (which never
+sends a gateway header) works through the chain in direct mode too.
+
+## AI Gateway enforcement at mcp-todos-server (added 2026-09-24)
+
+The gateway's inbound auth went from "no auth" to enforced, and
+`mcp-todos-server` now verifies the outer `Authorization` header
+session-level — this is what finally blocks a task-agent → MCP-server
+direct call from even reading the tool list, not just the per-tool-call
+checks that existed before.
+
+**The mechanism is token *injection* by the gateway, not forwarding.**
+The Privilege gateway is configured (console-side — PingOne app #7 plus
+gateway route config; none of it is repo code) to validate the opaque
+user-scoped gateway credential arriving in `Authorization` and to
+**substitute** a JWT minted from a dedicated enforcement client into the
+`Authorization` header on the upstream hop to mcp-todos-server.
+`X-MCP-Downstream-Authorization` (the fresh per-tool-call OBO token)
+passes through unchanged — task-agent and backend send byte-for-byte the
+same headers/tokens as before this change; what changed is what the MCP
+server accepts.
+
+- `mcp-todos-server/app/gateway_gate.py` — pure-ASGI middleware
+  (`GatewayEnforcementMiddleware`), wired in `app/main.py` after CORS so
+  it sits OUTSIDE CORS (add_middleware prepends). Gates only `/mcp`
+  (exact path); OPTIONS passes through for CORS preflight; `/api/*`,
+  `/api/health`, `/telemetry` untouched. When
+  `MCP_GATEWAY_ENFORCEMENT=true` (default), every request must present
+  `Authorization: Bearer <JWT>` whose claims verify via the same shared
+  `verify_bearer_token()` (same `OIDC_DISCOVERY_URL` +
+  `AGENT_EXPECTED_AUDIENCE` as the delegated-token check — the
+  enforcement client's scope lives on the same PingOne resource that
+  owns the todos audience) AND carry the configured claim
+  (`GATEWAY_ENFORCEMENT_CLAIM`, default `gatewayEnforcement`) as boolean
+  `true`. Fail-CLOSED with a 401 JSON body
+  (`{"error":"gateway_enforcement_failed","reason":...}`) — opposite
+  direction from the judge's fail-open, same as every other security
+  check. Emits a `gateway.enforcement` span (`gateway.outcome` =
+  ok|denied, `gateway.reason` on denial) per gated request; no audit-log
+  entry (that ring buffer is the OBO tool-call story, not session-level
+  gates).
+- `shared/inbound_auth.VerifiedIdentity` gained a `claims: dict[str,
+  Any]` field (additive, defaulted; `verify_bearer_token` populates it
+  from the decoded token) so callers can check custom claims without
+  this module interpreting them — the enforcement-claim check itself
+  lives in the gate, same "each service's own policy decides" shape as
+  `agent_client_id`/scope checks.
+- **PingOne app #7** (see README "PingOne setup"): Client Credentials,
+  scope on the SAME resource as app #6 (so `aud` = the MCP server's own
+  URL), custom claim `gatewayEnforcement` = boolean `true`. Held by the
+  gateway, not any service — no env vars in this repo for it.
+- **"Right token, wrong claim" is the failure mode to expect first**: a
+  valid JWT from an ordinary app with the right audience but no
+  `gatewayEnforcement` claim is rejected naming the claim — that's the
+  "audience follows the resource" gotcha asserting itself, fix it in
+  PingOne (claim mapping / resource placement), not in code.
+
 
 ## Skills
 

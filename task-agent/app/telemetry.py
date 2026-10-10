@@ -91,6 +91,12 @@ def get_recent_spans() -> list[dict[str, Any]]:
     return list(_recent_spans)
 
 
+def clear_recent_spans() -> int:
+    count = len(_recent_spans)
+    _recent_spans.clear()
+    return count
+
+
 _tracer = trace.get_tracer("agentorchestration.taskagent")
 
 

@@ -12,7 +12,7 @@ export function RefreshButton({ onClick, refreshing, label }: Props) {
       disabled={refreshing}
       aria-label={label}
       title={label}
-      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink disabled:opacity-50"
+      className="touch-target flex h-11 w-11 shrink-0 items-center justify-center sm:h-8 sm:w-8 rounded-full text-ink-muted transition hover:bg-code-bg hover:text-ink disabled:opacity-50"
     >
       <RefreshIcon spinning={refreshing} />
     </button>

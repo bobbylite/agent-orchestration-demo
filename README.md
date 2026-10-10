@@ -40,7 +40,8 @@ bounded retry, following the Azure Logic Apps
   specialist; the Task Agent independently re-verifies everything it
   receives before touching its own graph or a real MCP server.
 - **Chained RFC 8693 delegation — four token exchanges, six PingOne
-  identities, zero pass-through tokens.** The Chat Agent proves its own
+  identities (plus a seventh, the gateway's own enforcement client —
+  see the AI Gateway section), zero pass-through tokens.** The Chat Agent proves its own
   identity (OAuth Client Credentials) then combines that with the user's
   session token via [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
   into a *generic* delegation credential addressed to the Task Agent — it
@@ -146,7 +147,7 @@ answer questions about a todo list; everything else works without them)
 # terminal 3
 cd mcp-todos-server
 cp .env.example .env   # PingOne app #4 (its own UI) + own audience
-                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE
+                        # (its own URL) + TODOS_READ_SCOPE / TODOS_WRITE_SCOPE / TODOS_DELETE_SCOPE
 uv sync
 uv run uvicorn app.main:app --port 9000   # MCP endpoint at /mcp, its UI's API at /api/*
 
@@ -181,11 +182,12 @@ fail regardless of which order the two were clicked in.
 
 ## PingOne setup
 
-You need **six** PingOne applications now — one per hop in the chained
+You need **seven** PingOne applications now — one per hop in the chained
 RFC 8693 delegation (see `CLAUDE.md` "RFC 8693 chained delegation" for the
 full picture of why each hop mints its own credential instead of one
-token being forwarded unchanged). They break into three pairs, one pair
-per service that has its own identity:
+token being forwarded unchanged) plus one for the AI Gateway enforcement
+client below. Six break into three pairs, one pair per service that has
+its own identity:
 
 **1. User sign-in app** (OIDC Web App)
 - Grant type: Authorization Code, **PKCE required (S256)**
@@ -251,15 +253,157 @@ as #2, one hop later:
 as #3, one hop later:
 - Grant type: **Token Exchange**
 - Token endpoint auth method: `client_secret_basic`
-- Define `todos:read` and `todos:write` (or your own names — keep
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` matching) as scopes on a resource
+- Define `todos:read`, `todos:write`, and `todos:delete` (or your own names — keep
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` matching) as scopes on a resource
   whose **audience is the MCP server's own URL**
   (`http://localhost:9000/mcp`) and whose access token format is **JWT**
 - → `TODOS_MCP_CLIENT_ID`, `TODOS_MCP_CLIENT_SECRET`,
-  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE` (`task-agent/.env`)
+  `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` (`task-agent/.env`)
 
-All six are independent — you can enable just the sign-in app first, add
+**7. AI Gateway enforcement client** (Worker/Service app) — held by the
+**gateway itself**, not by any service in this repo (no client_id/secret
+goes into any `.env`; the Privilege gateway mints and injects the JWT):
+- Grant type: **Client Credentials** only
+- Define a scope on **the same resource as app #6's** (the one whose
+  audience is `http://localhost:9000/mcp`) so the minted JWT carries that
+  same audience, with access token format **JWT**
+- Add a **custom claim** `gatewayEnforcement` = boolean `true` to the
+  tokens this client mints (PingOne token policy / claim mapping)
+- The Privilege gateway validates the opaque user-scoped credential
+  arriving in `Authorization` and substitutes this client's JWT into the
+  `Authorization` header on the upstream hop; `mcp-todos-server`
+  verifies it session-level (see `MCP_GATEWAY_ENFORCEMENT` in
+  `mcp-todos-server/.env.example`). `X-MCP-Downstream-Authorization`
+  passes through unchanged.
+- → no env vars in this repo — gateway-side configuration only
+
+All seven are independent — you can enable just the sign-in app first, add
 the rest as you go; each pair only unlocks once both its apps are filled in.
+
+### AI Gateway OAuth client for MCP discovery
+
+The Task Agent discovers MCP tool schemas through the AI Gateway. The Chat
+Agent signs the user into the gateway with a second Authorization Code + PKCE
+flow, separate from the PingOne login used for the delegation chain. Do not
+hardcode a gateway access token in `task-agent/.env`.
+
+**Gateway enforcement (inbound auth).** The gateway is no longer trusted
+as a pass-through: the Privilege gateway validates the opaque user-scoped
+credential arriving in `Authorization` and substitutes the enforcement
+client's JWT (PingOne app #7 above, carrying `gatewayEnforcement: true`)
+into the `Authorization` header on the upstream hop.
+`mcp-todos-server` verifies that JWT session-level — signature, issuer,
+expiry, audience, and the `gatewayEnforcement` claim — so `initialize`
+and `tools/list` are gated too, and a caller that bypasses the gateway
+(direct mode) is rejected even from the tool list. Control with
+`MCP_GATEWAY_ENFORCEMENT` in `mcp-todos-server/.env` (default `true`;
+set `false` only for gateway-less local dev). The
+`X-MCP-Downstream-Authorization` OBO token is unaffected — it still rides
+the sidecar header and is still verified per tool call exactly as before.
+
+This app's gateway OAuth client is registered dynamically (RFC 7591) — the
+backend registers its own at startup and re-registers automatically when
+the gateway forgets it (see the durability note below). To create the
+initial seed client by hand:
+
+```bash
+curl -k -X POST \
+  'https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/register' \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "client_name": "Agent Orchestration Console",
+    "client_uri": "http://localhost:5173",
+    "redirect_uris": [
+      "http://localhost:8000/api/auth/gateway/callback",
+      "https://rluisi-agent-orchestration-client.ping-devops.com/api/auth/gateway/callback"
+    ],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"]
+  }'
+```
+
+The gateway uses a self-signed certificate in some local environments, so
+`-k` may be required locally. Prefer installing the appropriate CA certificate
+instead of disabling verification in production. Copy the returned `client_id`
+into `backend/.env` as the fallback seed (the backend prefers its own
+startup-registered client; see the durability note below):
+
+```env
+GATEWAY_CLIENT_ID=<returned-client-id>
+GATEWAY_CLIENT_AUTH_METHOD=none
+GATEWAY_REDIRECT_URI=http://localhost:8000/api/auth/gateway/callback
+```
+
+Gateway access and refresh tokens remain in an encrypted HttpOnly
+backend cookie and are passed to the Task Agent only over the internal A2A
+request.
+
+#### Gateway client registrations are not durable — self-healing registration + silent refresh
+
+The gateway forgets dynamically-registered clients on its own schedule —
+**not** tied to gateway restarts (confirmed live 2026-09-01: the gateway pod
+had 0 restarts across 5+ days while a previously working `client_id` came
+back `400 Unknown client`; the gateway's own log showed
+`authorize for unregistered client_id ...; rejecting`). Its DCR registry
+lives in the gateway process's memory with an undocumented internal
+eviction policy, so treat any registered client as eventually-expiring.
+
+**The backend now handles this itself** (added 2026-09-02, after refresh
+tokens were enabled on the gateway):
+
+- **One client per process, registered at startup.** `backend/main.py`'s
+  lifespan calls `app/auth/gateway_dcr.py`'s `ensure_client_registered()`
+  — an RFC 7591 `POST /register` (payload covers both local and deployed
+  callback URIs), kept for the process's entire lifetime. `GATEWAY_CLIENT_ID`
+  in `.env`/helm is only a fallback seed; a fresh process always mints its
+  own client so the very first browser login already hits a client the
+  gateway recognizes. Startup failure is logged, non-fatal, and retried
+  lazily on first gateway login.
+- **Both tokens persist server-side.** The `/gateway/callback` exchange
+  stores the access token (1 h) AND refresh token (30 days —
+  `refresh_token_expires_in: 2592000`) in an in-memory per-user store
+  (`app/auth/gateway_tokens.py`), on top of the existing encrypted cookie.
+- **Silent refresh on expiry.** Chat invocations resolve the gateway token
+  through a ladder: fresh stored access token → silent `refresh_token`
+  grant → if that fails with `unknown client` (the gateway evicted the
+  client), re-register a client and retry the refresh once → give up and
+  ask the user to re-login. Interactive browser login is now the last
+  resort, not the default recovery.
+- **Logout drops the server-side pair** along with the cookies.
+
+Manual bootstrap of the initial seed client (still valid; what the backend
+replicates automatically):
+
+```bash
+curl -k -X POST \
+  'https://rluisi-agentless-mcpgw.ping-devops.com/todos-mcp-server/register' \
+  -H 'Accept: application/json' \
+  -H 'Content-Type: application/json' \
+  --data '{
+    "client_name": "Agent Orchestration Console",
+    "client_uri": "http://localhost:5173",
+    "redirect_uris": [
+      "http://localhost:8000/api/auth/gateway/callback",
+      "https://rluisi-agent-orchestration-client.ping-devops.com/api/auth/gateway/callback"
+    ],
+    "token_endpoint_auth_method": "none",
+    "grant_types": ["authorization_code", "refresh_token"],
+    "response_types": ["code"]
+  }'
+```
+
+Two related facts: Postman-minted client IDs (from its own per-flow dynamic
+registration, redirect `oauth.pstmn.io`) must never be copied into the app
+config — they are bound to Postman's redirect, not the app's; and the
+client_id itself is a public identifier, so storing it in `values.yaml` is
+
+Two related facts: Postman-minted client IDs (from its own per-flow dynamic
+registration, redirect `oauth.pstmn.io`) must never be copied into the app
+config — they are bound to Postman's redirect, not the app's; and the
+client_id itself is a public identifier, so storing it in `values.yaml` is
+correct — only tokens/secrets must stay out.
 
 `SESSION_SECRET` is required by either sign-in app (any long random
 string; hashed into the 32-byte key used for JWE session encryption — use
@@ -290,7 +434,7 @@ propagates onto the token task-agent receives (see `CLAUDE.md`'s
 `ALLOWED_AGENT_CLIENT_ID` must be app #5's client_id
 (`TASK_AGENT_CLIENT_ID`), for the same reason, one hop later.
 `task-agent/.env` and `mcp-todos-server/.env`'s `TODOS_READ_SCOPE`/
-`TODOS_WRITE_SCOPE` must match each other exactly (`backend/.env` doesn't
+`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` must match each other exactly (`backend/.env` doesn't
 have these settings at all anymore).
 
 ## Claude Desktop as the orchestrator (optional)
@@ -358,9 +502,107 @@ second, independent origin (`http://localhost:8081`, service
 `mcp-todos-server-frontend`) — register *that* origin's
 `/api/auth/callback` with PingOne app #3, and set
 `MCP_TODOS_PUBLIC_ORIGIN=http://localhost:8081` (or your real domain).
+The Todos UI supports human add, complete, reopen, and delete operations;
+delete requires an explicit confirmation. The orchestration agent's
+`delete_todo` operation uses a separate `todos:delete` scope and must be
+permitted on the MCP resource and token-exchange client in PingOne.
 Keeping each frontend/backend pair behind its own single public origin
 means each session cookie stays host-scoped without any cross-site cookie
 configuration.
+
+## Kubernetes deployment with Docker Hub
+
+The Helm chart in `helm/` deploys five workloads into an existing namespace: the chat frontend, backend/chat agent, task agent, MCP Todos server, and Todos UI. It does not deploy `claude-bridge`, create a namespace, or manage an existing Ping Identity Helm release.
+
+Set your values:
+
+```bash
+export DOCKERHUB_USER=your-dockerhub-user
+export TAG=v1
+export NAMESPACE=your-existing-namespace
+export RELEASE=agentorchestration
+```
+
+Build and push the Python images from the repository root because they copy `shared/`:
+
+```bash
+docker buildx build --platform linux/amd64 -f backend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-backend:$TAG . --push
+docker buildx build --platform linux/amd64 -f task-agent/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-task-agent:$TAG . --push
+docker buildx build --platform linux/amd64 -f mcp-todos-server/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-mcp-todos-server:$TAG . --push
+```
+
+Build and push the frontend images using their own directories as build contexts:
+
+```bash
+docker buildx build --platform linux/amd64 -f frontend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-frontend:$TAG frontend --push
+docker buildx build --platform linux/amd64 -f mcp-todos-server/frontend/Dockerfile -t docker.io/$DOCKERHUB_USER/agentorchestration-todos-ui:$TAG mcp-todos-server/frontend --push
+```
+
+Create an uncommitted values override with your Docker Hub user, tag, two public HTTPS hosts, and Ingress class. The chart defaults include the current five image names and internal Service URL fallbacks. Use separate browser origins such as `https://chat.example.com` and `https://todos.example.com`; register these exact PingOne callbacks:
+
+```text
+https://chat.example.com/api/auth/callback
+https://todos.example.com/api/auth/callback
+```
+
+For production, pre-create or externally manage the backend, task-agent, and MCP server Secrets, then set their `*.secrets.existingSecret` values. Do not commit credentials. OAuth audience values must match the PingOne resources actually configured in your tenant; Kubernetes Service DNS is used for internal HTTP URLs, not automatically as a replacement for PingOne audiences.
+
+Validate and install into the existing namespace:
+
+```bash
+helm lint ./helm -f values-pingidentity.yaml
+helm template $RELEASE ./helm -n $NAMESPACE -f values-pingidentity.yaml > /tmp/agentorchestration.yaml
+kubectl apply --namespace $NAMESPACE --dry-run=server -f /tmp/agentorchestration.yaml
+helm upgrade --install $RELEASE ./helm --namespace $NAMESPACE -f values-pingidentity.yaml --wait --timeout 10m
+```
+
+Check all five workloads:
+
+```bash
+kubectl get deployments,services,pods,ingress -n $NAMESPACE -l app.kubernetes.io/instance=$RELEASE
+kubectl rollout status deployment/$RELEASE-backend -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-task-agent -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-mcp-todos-server -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-frontend -n $NAMESPACE
+kubectl rollout status deployment/$RELEASE-todos-ui -n $NAMESPACE
+```
+
+Smoke-test both public hosts and the task-agent proxy:
+
+```bash
+curl -i https://chat.example.com/api/health
+curl -i https://chat.example.com/task-agent-api/telemetry
+curl -i https://todos.example.com/api/health
+```
+
+Keep replicas at one initially because todos, telemetry, audit entries, and token ledgers are in memory.
+
+## Deployed demo URLs
+
+The current Kubernetes deployment exposes two browser origins. MCP telemetry is also merged into the chat console's OpenTelemetry panel through the `/mcp-todos-api/telemetry` proxy:
+
+
+- Chat console: https://rluisi-agent-orchestration-client.ping-devops.com
+- Todos UI: https://rluisi-agent-orchestration-todos.ping-devops.com
+
+Useful smoke-test endpoints:
+
+- Chat health: https://rluisi-agent-orchestration-client.ping-devops.com/api/health
+- Task Agent telemetry proxy: https://rluisi-agent-orchestration-client.ping-devops.com/task-agent-api/telemetry
+- Todos health: https://rluisi-agent-orchestration-todos.ping-devops.com/api/health
+
+These URLs are deployment-specific and require the corresponding PingOne configuration for login. Public browser URLs are different from internal Kubernetes URLs: the backend reaches `agentorchestration-task-agent:9010`, and the Task Agent reaches `agentorchestration-mcp-todos-server:9000/mcp`.
+
+## Release and Git tagging
+
+Use one immutable version tag for all five images and the Helm release; do not use `latest`. Keep per-image overrides such as `backend.imageTag` aligned with the global `image.tag`. After the commit and images are finalized, an annotated Git tag can be created and pushed:
+
+```bash
+git tag -a v1.0.0 -m "release v1.0.0"
+git push origin v1.0.0
+```
+
+Do not commit generated deployment values or credentials. Use `existingSecret`/external secret management for production; any credential-looking values currently present in deployment overrides should be rotated and removed separately.
 
 ## How the pieces fit together
 
@@ -414,14 +656,23 @@ configuration.
   check, and the raw verified token itself as `delegation_token` — used
   downstream as the *subject* token for this service's own further
   exchange.
-- `task-agent/app/graph.py` — MCP tools fetched once per task for schema
-  only (no auth needed for `tools/list`); the real work is in
-  `_scoped_tool_call` (wired via `ToolNode`'s `awrap_tool_call` hook):
-  policy check, then this service's own Client Credentials (cached per
-  task) + a **fresh, per-tool-call** Token Exchange scoped to exactly
-  `todos:read` or `todos:write`, then a freshly-authorized MCP connection
-  built just for that one call. This is what gives step-up scoping for
-  free — nothing about which scope was granted is cached across calls.
+- `task-agent/app/graph.py` — MCP tools are fetched and invoked through
+  `MCP_GATEWAY_URL`, authenticated with the user's separate PingOne Privilege
+  AI Gateway OAuth session. Every MCP request carries
+  `Authorization: Bearer <gateway-token>` plus
+  `X-MCP-Downstream-Authorization: Bearer <todos-token>`; the gateway
+  validates the opaque gateway credential and substitutes the enforcement
+  client's JWT (`gatewayEnforcement: true`) into `Authorization` upstream,
+  passing the sidecar token through unchanged. `_scoped_tool_call` performs policy
+  checks, then this service's own Client Credentials (cached per task) plus a
+  **fresh, per-tool-call** Token Exchange scoped to exactly `todos:read`,
+  `todos:write`, or `todos:delete`, preserving step-up scoping. The caller
+  emits `gateway.mcp_discovery` and `gateway.mcp_tool_call` spans for the
+  telemetry panel; the external gateway is not a local process with its own
+  ring buffer. The console's **AI Gateway** inspector reads the Task Agent's
+  bounded `/gateway/insights` endpoint to show real discovered tools and
+  gateway outcomes; it is diagnostic/in-memory only, never an authorization
+  source of truth.
   The same file also builds the `judge` node — a `JudgeVerdict` Pydantic
   contract, on `ChatAnthropic` or `ChatGroq` depending on `JUDGE_PROVIDER`
   — that grades `task_assistant`'s proposed answer against the delegated
@@ -443,6 +694,10 @@ configuration.
   produced and re-checks policy (`mcp-todos-server/app/policy.py` — this
   one *does* still check scope, since the token genuinely carries it) —
   this service doesn't trust that task-agent already gated the call.
+  One layer earlier, `app/gateway_gate.py` verifies the gateway-injected
+  enforcement JWT in the outer `Authorization` header session-level
+  (`MCP_GATEWAY_ENFORCEMENT`, default on) — the layer that keeps direct
+  callers out of the tool list entirely.
 - `mcp-todos-server/app/audit.py` — the OBO audit log: an in-memory ring
   buffer (same shape as `backend/app/telemetry.py`'s span buffer), one
   entry per tool call, human or agent, allowed or denied, attributing

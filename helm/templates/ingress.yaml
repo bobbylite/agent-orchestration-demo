@@ -13,22 +13,81 @@ spec:
   {{- if .Values.ingress.className }}
   ingressClassName: {{ .Values.ingress.className }}
   {{- end }}
-  {{- if .Values.ingress.tls.enabled }}
   tls:
+    {{- if .Values.ingress.console.tls.enabled }}
     - hosts:
-        - {{ .Values.ingress.host }}
-      secretName: {{ .Values.ingress.tls.secretName }}
-  {{- end }}
+        - {{ .Values.ingress.console.host }}
+      secretName: {{ .Values.ingress.console.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.todos.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.todos.host }}
+      secretName: {{ .Values.ingress.todos.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.backend.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.backend.host }}
+      secretName: {{ .Values.ingress.backend.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.taskAgent.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.taskAgent.host }}
+      secretName: {{ .Values.ingress.taskAgent.tls.secretName }}
+    {{- end }}
+    {{- if .Values.ingress.mcpTodos.tls.enabled }}
+    - hosts:
+        - {{ .Values.ingress.mcpTodos.host }}
+      secretName: {{ .Values.ingress.mcpTodos.tls.secretName }}
+    {{- end }}
   rules:
-    - host: {{ .Values.ingress.host }}
+    - host: {{ .Values.ingress.console.host }}
       http:
         paths:
-          # All traffic to a single frontend Service; nginx proxies /api/ internally.
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: {{ include "agentorchestration.frontendSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.todos.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.todosUiSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.backend.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.backendSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.taskAgent.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.taskAgentSvcName" . }}
+                port:
+                  name: http
+    - host: {{ .Values.ingress.mcpTodos.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "agentorchestration.mcpTodosSvcName" . }}
                 port:
                   name: http
 {{- end }}

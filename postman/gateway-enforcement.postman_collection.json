@@ -1,0 +1,766 @@
+{
+  "info": {
+    "_postman_id": "b7e3a1c2-5f4d-4e8a-9c6b-2d1f0a3e5b7c",
+    "name": "AI Gateway Enforcement — mcp-todos-server",
+    "description": "Demo collection for the session-level AI Gateway enforcement gate on /mcp (mcp-todos-server/app/gateway_gate.py).\n\n**The story it tells:**\n1. **Setup** — mint an enforcement JWT straight from PingOne app #7 (the same credential the Privilege gateway injects into `Authorization` in production — minting it directly proves what the MCP server requires, with no gateway needed). Optionally also mint a token from an ordinary app (right audience, NO enforcement claim) to prove the claim check is real.\n2. **Rejections** — `initialize` with no bearer → 401; garbage bearer → 401; valid JWT without the `gatewayEnforcement` claim → 401 naming the claim. This is the gate that keeps direct callers (task-agent bypassing the gateway) out of the tool list entirely.\n3. **Success** — `initialize` → `notifications/initialized` → `tools/list` carrying the enforcement JWT: the full MCP session handshake passes the gate.\n4. **Escape hatch** — the same request with `MCP_GATEWAY_ENFORCEMENT=false` on the server: the unauthenticated call goes through again.\n\n**Prerequisites**\n- mcp-todos-server running on :9000 **with enforcement on**. The repo's live `.env` ships `MCP_GATEWAY_ENFORCEMENT=false` (gateway-less dev default) — flip it to `true`, or run:\n  `cd mcp-todos-server && MCP_GATEWAY_ENFORCEMENT=true uv run uvicorn app.main:app --port 9000`\n- PingOne app #7 created per README \"PingOne setup\" (Client Credentials; scope on the SAME resource as app #6 so `aud` = `http://localhost:9000/mcp`; custom claim `gatewayEnforcement` = boolean `true`). Fill in `enforcement_client_id` / `enforcement_client_secret` collection variables.\n- Optional (for the wrong-claim 401): credentials of any ordinary client whose scope is on that same resource — app #6's (`TODOS_MCP_CLIENT_ID`) work. Fill `ordinary_client_id` / `ordinary_client_secret`.\n\n**Run order**: run folder 0 first (it sets the token variables), then 1, then 2. Or use Postman Runner over the whole collection in order.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:9000",
+      "type": "string"
+    },
+    {
+      "key": "mcp_expected_audience",
+      "value": "http://localhost:9000/mcp",
+      "type": "string",
+      "description": "Must equal mcp-todos-server/.env's AGENT_EXPECTED_AUDIENCE — the audience the gate verifies the enforcement JWT against."
+    },
+    {
+      "key": "mcp_protocol_version",
+      "value": "2025-06-18",
+      "type": "string",
+      "description": "Overwritten with the version negotiated by the initialize response."
+    },
+    {
+      "key": "token_endpoint",
+      "value": "https://auth.pingone.com/5ba551c1-a8e9-45c7-a75e-2893f8761cee/as/token",
+      "type": "string",
+      "description": "PingOne environment token endpoint (matches the repo's OIDC_DISCOVERY_URL tenant)."
+    },
+    {
+      "key": "enforcement_scope",
+      "value": "",
+      "type": "string",
+      "description": "Optional. Leave empty to omit scope from the grant (PingOne then issues the client's default scopes). Set only if you want to pin one."
+    },
+    {
+      "key": "enforcement_client_id",
+      "value": "",
+      "type": "string",
+      "description": "PingOne app #7 (the gateway enforcement client) — fill this in after creating the app."
+    },
+    {
+      "key": "enforcement_client_secret",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "ordinary_client_id",
+      "value": "",
+      "type": "string",
+      "description": "Any ordinary client whose scope lives on the same resource as app #6 (right audience, no gatewayEnforcement claim) — e.g. TODOS_MCP_CLIENT_ID. Used for the wrong-claim 401."
+    },
+    {
+      "key": "ordinary_client_secret",
+      "value": "",
+      "type": "secret"
+    },
+    {
+      "key": "enforcement_token",
+      "value": "",
+      "type": "secret",
+      "description": "Set automatically by the mint request in folder 0."
+    },
+    {
+      "key": "ordinary_token",
+      "value": "",
+      "type": "secret",
+      "description": "Set automatically by the mint request in folder 0."
+    },
+    {
+      "key": "mcp_session_id",
+      "value": "",
+      "type": "string",
+      "description": "Set automatically by the successful initialize."
+    },
+    {
+      "key": "cc_grant_body",
+      "value": "grant_type=client_credentials",
+      "type": "string",
+      "description": "Built by the mint requests' pre-request scripts — do not edit."
+    }
+  ],
+  "item": [
+    {
+      "name": "0 — Setup: mint tokens",
+      "description": "Client-credentials grants against PingOne. The enforcement client's token is exactly what the Privilege gateway injects into `Authorization` upstream in the real flow; minting it here proves what the MCP server itself demands.",
+      "item": [
+        {
+          "name": "Mint enforcement-client JWT (PingOne app #7)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{enforcement_client_id}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{enforcement_client_secret}}",
+                  "type": "string"
+                },
+                {
+                  "key": "showPassword",
+                  "value": false,
+                  "type": "bool"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{{cc_grant_body}}"
+            },
+            "url": {
+              "raw": "{{token_endpoint}}",
+              "host": [
+                "{{token_endpoint}}"
+              ]
+            },
+            "description": "Client Credentials grant against PingOne app #7. Stores the token in `enforcement_token` and decodes the claims to verify `gatewayEnforcement: true` and the MCP audience are actually present — the two PingOne-side misconfigurations this demo hits first."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Build the form body; omit scope entirely when the variable is empty",
+                  "if (!(pm.collectionVariables.get('enforcement_client_id') || '')) {",
+                  "    console.warn('enforcement_client_id is empty — create PingOne app #7 (README \"PingOne setup\", app 7) and fill enforcement_client_id/secret. Skipping the mint.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}",
+                  "const scope = (pm.collectionVariables.get('enforcement_scope') || '').trim();",
+                  "let body = 'grant_type=client_credentials';",
+                  "if (scope) body += '&scope=' + encodeURIComponent(scope);",
+                  "pm.collectionVariables.set('cc_grant_body', body);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 from the PingOne token endpoint', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (!body.access_token) {",
+                  "    pm.test('PingOne accepted the grant (fill in enforcement_client_id/secret)', () => {",
+                  "        pm.expect(body.error || 'no access_token in response').to.eql(null);",
+                  "    });",
+                  "    console.error('PingOne error:', body.error, '-', body.error_description);",
+                  "    return;",
+                  "}",
+                  "pm.collectionVariables.set('enforcement_token', body.access_token);",
+                  "",
+                  "// Decode the JWT payload (base64url) — no signature check needed here,",
+                  "// the MCP server's gate does that; this is diagnosis of the PingOne config.",
+                  "const parts = body.access_token.split('.');",
+                  "pm.test('Access token is a JWT (3 dot-separated parts)', () => pm.expect(parts.length).to.eql(3));",
+                  "if (parts.length !== 3) return;",
+                  "let claims = {};",
+                  "try {",
+                  "    const p = parts[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "    claims = JSON.parse(CryptoJS.enc.Base64.parse(p).toString(CryptoJS.enc.Utf8));",
+                  "} catch (e) {",
+                  "    console.error('Could not decode JWT payload:', e);",
+                  "}",
+                  "console.log('aud:', JSON.stringify(claims.aud));",
+                  "console.log('scope:', claims.scope);",
+                  "console.log('gatewayEnforcement:', claims.gatewayEnforcement);",
+                  "",
+                  "pm.test('JWT carries gatewayEnforcement claim as boolean true', () => {",
+                  "    pm.expect(claims.gatewayEnforcement).to.eql(true);",
+                  "});",
+                  "pm.test('JWT audience includes the MCP server URL', () => {",
+                  "    const aud = Array.isArray(claims.aud) ? claims.aud : [claims.aud];",
+                  "    pm.expect(aud).to.include(pm.collectionVariables.get('mcp_expected_audience'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mint ordinary-app JWT (right audience, NO claim)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{ordinary_client_id}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{ordinary_client_secret}}",
+                  "type": "string"
+                },
+                {
+                  "key": "showPassword",
+                  "value": false,
+                  "type": "bool"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "grant_type=client_credentials&scope=todos%3Aread"
+            },
+            "url": {
+              "raw": "{{token_endpoint}}",
+              "host": [
+                "{{token_endpoint}}"
+              ]
+            },
+            "description": "Mints a perfectly valid JWT from an ordinary app (e.g. TODOS_MCP_CLIENT_ID, app #6) — right audience via its resource, correct scope, but no gatewayEnforcement claim. This is the 'right token, wrong claim' case the gate must still reject. Scope is todos:read so it would even pass the per-tool scope check if it got that far — the claim is the ONLY thing standing between it and the tool list."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('ordinary_client_id') || '')) {",
+                  "    console.warn('ordinary_client_id is empty — fill ordinary_client_id/secret (e.g. TODOS_MCP_CLIENT_ID) to demo the wrong-claim 401. Skipping the mint.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 from the PingOne token endpoint', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "if (!body.access_token) {",
+                  "    console.error('PingOne error:', body.error, '-', body.error_description, '(fill ordinary_client_id/secret, or skip this one)');",
+                  "    return;",
+                  "}",
+                  "pm.collectionVariables.set('ordinary_token', body.access_token);",
+                  "const parts = body.access_token.split('.');",
+                  "if (parts.length === 3) {",
+                  "    try {",
+                  "        const p = parts[1].replace(/-/g, '+').replace(/_/g, '/');",
+                  "        const claims = JSON.parse(CryptoJS.enc.Base64.parse(p).toString(CryptoJS.enc.Utf8));",
+                  "        console.log('aud:', JSON.stringify(claims.aud), '| gatewayEnforcement:', claims.gatewayEnforcement);",
+                  "        pm.test('Sanity: this token has NO gatewayEnforcement claim', () => {",
+                  "            pm.expect(claims.gatewayEnforcement).to.be.undefined;",
+                  "        });",
+                  "    } catch (e) {}",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1 — Enforcement ON: the 401s",
+      "description": "Every request here posts an MCP `initialize` to /mcp and must be rejected fail-closed by the gate. Run folder 0 first (or at least mint the enforcement + ordinary tokens).",
+      "item": [
+        {
+          "name": "401 — initialize, no bearer token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"{{mcp_protocol_version}}\",\"capabilities\":{},\"clientInfo\":{\"name\":\"postman-demo\",\"version\":\"1.0\"}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "THE headline demo request: the exact call a task-agent making a direct MCP call would make, with no Authorization header at all. The gate rejects it before the MCP session layer ever sees it — so initialize AND tools/list are unreachable without the enforcement credential."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 without a bearer token', () => pm.response.to.have.status(401));",
+                  "const body = pm.response.json();",
+                  "pm.test('Body names the gateway enforcement failure', () => {",
+                  "    pm.expect(body.error).to.eql('gateway_enforcement_failed');",
+                  "    pm.expect(body.reason).to.eql('missing_bearer_token');",
+                  "});",
+                  "console.log('gate reason:', body.reason);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 — initialize, garbage bearer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer not-a-real-jwt"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"{{mcp_protocol_version}}\",\"capabilities\":{},\"clientInfo\":{\"name\":\"postman-demo\",\"version\":\"1.0\"}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "A bearer that isn't a JWT at all — rejected on signature (the gate fetched the issuer's real JWKS to try)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 with a garbage bearer', () => pm.response.to.have.status(401));",
+                  "const body = pm.response.json();",
+                  "pm.test('Failure is a signature/parse rejection', () => {",
+                  "    pm.expect(body.error).to.eql('gateway_enforcement_failed');",
+                  "    pm.expect(body.reason).to.match(/invalid_signature|malformed_token/);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "401 — initialize, valid JWT but no enforcement claim",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{ordinary_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"{{mcp_protocol_version}}\",\"capabilities\":{},\"clientInfo\":{\"name\":\"postman-demo\",\"version\":\"1.0\"}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "The adversarial case from the plan: a genuinely valid JWT — right signature, right issuer, right audience, even the right todos scope — from an ordinary app. The gate rejects it purely on the missing gatewayEnforcement claim, proving the check is the claim, not just bearer-presence. Requires folder 0's ordinary mint to have run."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('ordinary_token') || '')) {",
+                  "    console.warn('ordinary_token not minted (fill ordinary_client_id/secret, run folder 0) — this run only proves bearer-required, not the claim check.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401 even with a valid, correctly-audienced JWT', () => pm.response.to.have.status(401));",
+                  "const body = pm.response.json();",
+                  "pm.test('Rejected by the enforcement gate', () => {",
+                  "    pm.expect(body.error).to.eql('gateway_enforcement_failed');",
+                  "});",
+                  "pm.test('Rejection names the missing claim', () => {",
+                  "    pm.expect(body.reason).to.include('gatewayEnforcement');",
+                  "});",
+                  "console.log('gate reason:', body.reason);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 — Enforcement ON: success with the bearer",
+      "description": "The full MCP handshake — initialize → initialized notification → tools/list — each request carrying ONLY the enforcement JWT in the outer Authorization header (no OBO token needed: the gate is session-level; per-tool-call OBO checks are a separate layer that runs later).",
+      "item": [
+        {
+          "name": "200 — initialize with enforcement JWT",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{enforcement_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"{{mcp_protocol_version}}\",\"capabilities\":{},\"clientInfo\":{\"name\":\"postman-demo\",\"version\":\"1.0\"}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Same request that 401'd in folder 1 — now with the enforcement client's JWT (the exact credential the gateway injects in production). Captures the mcp-session-id and negotiated protocol version for the follow-ups."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('enforcement_token') || '')) {",
+                  "    console.warn('enforcement_token not minted (fill enforcement_client_id/secret, run folder 0) — skipping success path.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('initialize accepted with the enforcement JWT', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const sid = pm.response.headers.get('mcp-session-id');",
+                  "pm.test('server issued an mcp-session-id', () => pm.expect(sid).to.be.a('string').and.not.empty);",
+                  "if (sid) pm.collectionVariables.set('mcp_session_id', sid);",
+                  "if (body && body.result && body.result.protocolVersion) {",
+                  "    pm.collectionVariables.set('mcp_protocol_version', body.result.protocolVersion);",
+                  "    console.log('negotiated protocol version:', body.result.protocolVersion);",
+                  "}",
+                  "if (body && body.result && body.result.serverInfo) {",
+                  "    console.log('server:', body.result.serverInfo.name, body.result.serverInfo.version);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "202 — initialized notification (session established)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{enforcement_token}}"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Completes the MCP handshake so tools/list is allowed by the session layer. The gate still verifies the bearer on this POST too — every /mcp request, not just initialize."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('enforcement_token') || '') || !(pm.collectionVariables.get('mcp_session_id') || '')) {",
+                  "    console.warn('no enforcement_token or mcp_session_id — skipping the notification.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('notification accepted (2xx), gate passed it through', () => {",
+                  "    pm.expect([200, 202]).to.include(pm.response.code);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "200 — tools/list through the gate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{enforcement_token}}"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              },
+              {
+                "key": "mcp-protocol-version",
+                "value": "{{mcp_protocol_version}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "The user's stated goal, inverted: this is the tool list that direct callers can no longer reach. Without the enforcement JWT this exact request 401s at the gate; with it, the full todos tool inventory comes back. (Per-tool calls then additionally require the OBO token downstream — unchanged, one layer later.)"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('mcp_session_id') || '')) {",
+                  "    console.warn('no mcp_session_id — initialize has not succeeded yet; skipping tools/list.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('tools/list accepted (the gate let the session through)', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('tool inventory present', () => {",
+                  "    pm.expect(body.result && body.result.tools).to.be.an('array').that.is.not.empty;",
+                  "});",
+                  "if (body.result && body.result.tools) {",
+                  "    const names = body.result.tools.map(t => t.name);",
+                  "    console.log('tools:', names.join(', '));",
+                  "    pm.test('todos tools visible through the gate', () => pm.expect(names).to.include('list_todos'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE — terminate session (cleanup)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{enforcement_token}}"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcp_session_id}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Terminates the MCP streamable-http session. Also demonstrates the gate enforcing on DELETE — not just POST — which matters because a caller can't keep a session alive past a revoked credential."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!(pm.collectionVariables.get('mcp_session_id') || '')) {",
+                  "    console.warn('no session to terminate — skipping cleanup.');",
+                  "    try { pm.execution.skipRequest(); } catch (e) {}",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('session terminated (2xx)', () => pm.expect([200, 204]).to.include(pm.response.code));",
+                  "pm.collectionVariables.set('mcp_session_id', '');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 — Escape hatch: enforcement OFF",
+      "description": "Flip the server to MCP_GATEWAY_ENFORCEMENT=false (mcp-todos-server/.env, or restart with the env var false) and run this: the same unauthenticated initialize from folder 1 now succeeds — that's the gateway-less local-dev/claude-bridge mode. Flip it back to true and this same request 401s again.",
+      "item": [
+        {
+          "name": "initialize, no bearer — 200 when OFF, 401 when ON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"{{mcp_protocol_version}}\",\"capabilities\":{},\"clientInfo\":{\"name\":\"postman-demo\",\"version\":\"1.0\"}}}"
+            },
+            "url": {
+              "raw": "{{base_url}}/mcp",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mcp"
+              ]
+            },
+            "description": "Identical to the folder-1 headline request — its outcome is purely a function of the server's MCP_GATEWAY_ENFORCEMENT toggle."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('response is one of the two expected modes', () => {",
+                  "    pm.expect([200, 401]).to.include(pm.response.code);",
+                  "});",
+                  "if (pm.response.code === 200) {",
+                  "    console.log('Gate is OFF: unauthenticated initialize accepted (escape hatch works).');",
+                  "    const sid = pm.response.headers.get('mcp-session-id');",
+                  "    if (sid) pm.collectionVariables.set('mcp_session_id', sid);",
+                  "} else {",
+                  "    const body = pm.response.json();",
+                  "    console.log('Gate is still ON (401):', body.reason, '— set MCP_GATEWAY_ENFORCEMENT=false on mcp-todos-server and restart to demo the hatch.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -34,13 +34,25 @@ class Settings(BaseSettings):
     # it is a single toggle (see _call_bearer_token in app/mcp_server.py):
     #   mcp_auth_downstream_header = true  -> X-MCP-Downstream-Authorization
     #                                         (current/normal mode: the outer
-    #                                         Authorization header belongs to
-    #                                         the AI Gateway, so the delegated
-    #                                         token rides the sidecar header
-    #                                         the gateway preserves upstream)
+    #                                         Authorization header carries the
+    #                                         gateway-injected enforcement JWT
+    #                                         — see gateway_enforcement below
+    #                                         — so the delegated token rides
+    #                                         the sidecar header the gateway
+    #                                         preserves upstream)
     #   mcp_auth_downstream_header = false -> the standard Authorization
     #                                         header (direct callers that
     #                                         bypass the gateway)
+    # Gateway enforcement (app/gateway_gate.py): when true (default), the
+    # /mcp endpoint ALSO verifies the outer Authorization header as a JWT
+    # minted by the special gateway-injection client (custom claim
+    # gatewayEnforcement: true) that the AI Gateway substitutes for the
+    # opaque user-scoped credential it validated — session-level, so
+    # initialize/tools/list are gated too, and direct callers that bypass
+    # the gateway are rejected. Set false only for gateway-less local dev.
+    # Same discovery URL and audience as the delegated token check (same
+    # PingOne tenant; the enforcement client's scope must live on the
+    # resource that owns AGENT_EXPECTED_AUDIENCE).
     agent_expected_audience: str | None = Field(default=None)
     allowed_agent_client_id: str | None = Field(default=None)
     todos_read_scope: str = Field(default="todos:read")
@@ -48,6 +60,8 @@ class Settings(BaseSettings):
     todos_delete_scope: str = Field(default="todos:delete")
     mcp_auth_downstream_header: bool = Field(default=True)
     mcp_auth_fallback_standard_header: bool = Field(default=False)
+    mcp_gateway_enforcement: bool = Field(default=True)
+    gateway_enforcement_claim: str = Field(default="gatewayEnforcement")
 
     # Friendly label for the audit log ("Agent Task Agent used ..." instead
     # of a raw client_id) — purely cosmetic, defaults to the client_id.

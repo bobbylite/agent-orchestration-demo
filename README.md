@@ -40,7 +40,8 @@ bounded retry, following the Azure Logic Apps
   specialist; the Task Agent independently re-verifies everything it
   receives before touching its own graph or a real MCP server.
 - **Chained RFC 8693 delegation — four token exchanges, six PingOne
-  identities, zero pass-through tokens.** The Chat Agent proves its own
+  identities (plus a seventh, the gateway's own enforcement client —
+  see the AI Gateway section), zero pass-through tokens.** The Chat Agent proves its own
   identity (OAuth Client Credentials) then combines that with the user's
   session token via [RFC 8693 Token Exchange](https://www.rfc-editor.org/rfc/rfc8693)
   into a *generic* delegation credential addressed to the Task Agent — it
@@ -181,11 +182,12 @@ fail regardless of which order the two were clicked in.
 
 ## PingOne setup
 
-You need **six** PingOne applications now — one per hop in the chained
+You need **seven** PingOne applications now — one per hop in the chained
 RFC 8693 delegation (see `CLAUDE.md` "RFC 8693 chained delegation" for the
 full picture of why each hop mints its own credential instead of one
-token being forwarded unchanged). They break into three pairs, one pair
-per service that has its own identity:
+token being forwarded unchanged) plus one for the AI Gateway enforcement
+client below. Six break into three pairs, one pair per service that has
+its own identity:
 
 **1. User sign-in app** (OIDC Web App)
 - Grant type: Authorization Code, **PKCE required (S256)**
@@ -258,7 +260,24 @@ as #3, one hop later:
 - → `TODOS_MCP_CLIENT_ID`, `TODOS_MCP_CLIENT_SECRET`,
   `TODOS_READ_SCOPE`/`TODOS_WRITE_SCOPE`/`TODOS_DELETE_SCOPE` (`task-agent/.env`)
 
-All six are independent — you can enable just the sign-in app first, add
+**7. AI Gateway enforcement client** (Worker/Service app) — held by the
+**gateway itself**, not by any service in this repo (no client_id/secret
+goes into any `.env`; the Privilege gateway mints and injects the JWT):
+- Grant type: **Client Credentials** only
+- Define a scope on **the same resource as app #6's** (the one whose
+  audience is `http://localhost:9000/mcp`) so the minted JWT carries that
+  same audience, with access token format **JWT**
+- Add a **custom claim** `gatewayEnforcement` = boolean `true` to the
+  tokens this client mints (PingOne token policy / claim mapping)
+- The Privilege gateway validates the opaque user-scoped credential
+  arriving in `Authorization` and substitutes this client's JWT into the
+  `Authorization` header on the upstream hop; `mcp-todos-server`
+  verifies it session-level (see `MCP_GATEWAY_ENFORCEMENT` in
+  `mcp-todos-server/.env.example`). `X-MCP-Downstream-Authorization`
+  passes through unchanged.
+- → no env vars in this repo — gateway-side configuration only
+
+All seven are independent — you can enable just the sign-in app first, add
 the rest as you go; each pair only unlocks once both its apps are filled in.
 
 ### AI Gateway OAuth client for MCP discovery
@@ -267,6 +286,20 @@ The Task Agent discovers MCP tool schemas through the AI Gateway. The Chat
 Agent signs the user into the gateway with a second Authorization Code + PKCE
 flow, separate from the PingOne login used for the delegation chain. Do not
 hardcode a gateway access token in `task-agent/.env`.
+
+**Gateway enforcement (inbound auth).** The gateway is no longer trusted
+as a pass-through: the Privilege gateway validates the opaque user-scoped
+credential arriving in `Authorization` and substitutes the enforcement
+client's JWT (PingOne app #7 above, carrying `gatewayEnforcement: true`)
+into the `Authorization` header on the upstream hop.
+`mcp-todos-server` verifies that JWT session-level — signature, issuer,
+expiry, audience, and the `gatewayEnforcement` claim — so `initialize`
+and `tools/list` are gated too, and a caller that bypasses the gateway
+(direct mode) is rejected even from the tool list. Control with
+`MCP_GATEWAY_ENFORCEMENT` in `mcp-todos-server/.env` (default `true`;
+set `false` only for gateway-less local dev). The
+`X-MCP-Downstream-Authorization` OBO token is unaffected — it still rides
+the sidecar header and is still verified per tool call exactly as before.
 
 This app's gateway OAuth client is registered dynamically (RFC 7591) — the
 backend registers its own at startup and re-registers automatically when
@@ -628,7 +661,9 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   AI Gateway OAuth session. Every MCP request carries
   `Authorization: Bearer <gateway-token>` plus
   `X-MCP-Downstream-Authorization: Bearer <todos-token>`; the gateway
-  promotes the sidecar token upstream. `_scoped_tool_call` performs policy
+  validates the opaque gateway credential and substitutes the enforcement
+  client's JWT (`gatewayEnforcement: true`) into `Authorization` upstream,
+  passing the sidecar token through unchanged. `_scoped_tool_call` performs policy
   checks, then this service's own Client Credentials (cached per task) plus a
   **fresh, per-tool-call** Token Exchange scoped to exactly `todos:read`,
   `todos:write`, or `todos:delete`, preserving step-up scoping. The caller
@@ -659,6 +694,10 @@ Do not commit generated deployment values or credentials. Use `existingSecret`/e
   produced and re-checks policy (`mcp-todos-server/app/policy.py` — this
   one *does* still check scope, since the token genuinely carries it) —
   this service doesn't trust that task-agent already gated the call.
+  One layer earlier, `app/gateway_gate.py` verifies the gateway-injected
+  enforcement JWT in the outer `Authorization` header session-level
+  (`MCP_GATEWAY_ENFORCEMENT`, default on) — the layer that keeps direct
+  callers out of the tool list entirely.
 - `mcp-todos-server/app/audit.py` — the OBO audit log: an in-memory ring
   buffer (same shape as `backend/app/telemetry.py`'s span buffer), one
   entry per tool call, human or agent, allowed or denied, attributing

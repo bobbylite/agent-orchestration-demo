@@ -1150,19 +1150,76 @@ boolean (the two URLs are separate settings on purpose). `Settings.mcp_endpoint_
 destination through it, so the frontend's AiGatewayPanel/diagram keep
 working unchanged (same span names, just a local URL).
 
-**Direct mode needs only two env toggles, no mcp-todos-server changes**:
-its existing `MCP_AUTH_DOWNSTREAM_HEADER=true` mode already reads the
-delegated token exclusively from `X-MCP-Downstream-Authorization` and never
-verifies the outer `Authorization` header (which was only ever the
-gateway's credential), and its `/mcp` `tools/list` is unauthenticated
-(verification happens per tool call). The other half is `backend/.env`:
-comment out the `GATEWAY_*` block → `gateway_configured` False → no
-startup DCR, no SSE gateway gate, `gateway_enabled:false` in `/me`. All
+**Direct mode needs three env toggles now** (the third added 2026-09-24,
+see "AI Gateway enforcement" below): `mcp-todos-server/.env`'s
+`MCP_GATEWAY_ENFORCEMENT=false` — without it the session-level
+`/mcp` gate (app/gateway_gate.py) rejects every direct call, including
+`tools/list`, because a direct caller carries no gateway-injected
+enforcement JWT — plus `task-agent/.env`'s `GATEWAY_REQUIRED=false`, and
+`backend/.env`: comment out the `GATEWAY_*` block → `gateway_configured`
+False → no startup DCR, no SSE gateway gate, `gateway_enabled:false` in
+`/me`. With enforcement still on, direct mode fails at discovery with a
+readable 401-derived message (task-agent's `_find_http_status_error`
+unwraps it; AiGatewayPanel shows a `policy_denied` activity). All
 PingOne auth is untouched in either mode — inbound auth, the RFC 8693
 chain, the per-tool-call scoped exchange (step 4), policy ACLs, the
 Authorize PDP, and CIBA all still run exactly as before; only the
 gateway boundary is rerouted. Side effect: `claude-bridge/` (which never
 sends a gateway header) works through the chain in direct mode too.
+
+## AI Gateway enforcement at mcp-todos-server (added 2026-09-24)
+
+The gateway's inbound auth went from "no auth" to enforced, and
+`mcp-todos-server` now verifies the outer `Authorization` header
+session-level — this is what finally blocks a task-agent → MCP-server
+direct call from even reading the tool list, not just the per-tool-call
+checks that existed before.
+
+**The mechanism is token *injection* by the gateway, not forwarding.**
+The Privilege gateway is configured (console-side — PingOne app #7 plus
+gateway route config; none of it is repo code) to validate the opaque
+user-scoped gateway credential arriving in `Authorization` and to
+**substitute** a JWT minted from a dedicated enforcement client into the
+`Authorization` header on the upstream hop to mcp-todos-server.
+`X-MCP-Downstream-Authorization` (the fresh per-tool-call OBO token)
+passes through unchanged — task-agent and backend send byte-for-byte the
+same headers/tokens as before this change; what changed is what the MCP
+server accepts.
+
+- `mcp-todos-server/app/gateway_gate.py` — pure-ASGI middleware
+  (`GatewayEnforcementMiddleware`), wired in `app/main.py` after CORS so
+  it sits OUTSIDE CORS (add_middleware prepends). Gates only `/mcp`
+  (exact path); OPTIONS passes through for CORS preflight; `/api/*`,
+  `/api/health`, `/telemetry` untouched. When
+  `MCP_GATEWAY_ENFORCEMENT=true` (default), every request must present
+  `Authorization: Bearer <JWT>` whose claims verify via the same shared
+  `verify_bearer_token()` (same `OIDC_DISCOVERY_URL` +
+  `AGENT_EXPECTED_AUDIENCE` as the delegated-token check — the
+  enforcement client's scope lives on the same PingOne resource that
+  owns the todos audience) AND carry the configured claim
+  (`GATEWAY_ENFORCEMENT_CLAIM`, default `gatewayEnforcement`) as boolean
+  `true`. Fail-CLOSED with a 401 JSON body
+  (`{"error":"gateway_enforcement_failed","reason":...}`) — opposite
+  direction from the judge's fail-open, same as every other security
+  check. Emits a `gateway.enforcement` span (`gateway.outcome` =
+  ok|denied, `gateway.reason` on denial) per gated request; no audit-log
+  entry (that ring buffer is the OBO tool-call story, not session-level
+  gates).
+- `shared/inbound_auth.VerifiedIdentity` gained a `claims: dict[str,
+  Any]` field (additive, defaulted; `verify_bearer_token` populates it
+  from the decoded token) so callers can check custom claims without
+  this module interpreting them — the enforcement-claim check itself
+  lives in the gate, same "each service's own policy decides" shape as
+  `agent_client_id`/scope checks.
+- **PingOne app #7** (see README "PingOne setup"): Client Credentials,
+  scope on the SAME resource as app #6 (so `aud` = the MCP server's own
+  URL), custom claim `gatewayEnforcement` = boolean `true`. Held by the
+  gateway, not any service — no env vars in this repo for it.
+- **"Right token, wrong claim" is the failure mode to expect first**: a
+  valid JWT from an ordinary app with the right audience but no
+  `gatewayEnforcement` claim is rejected naming the claim — that's the
+  "audience follows the resource" gotcha asserting itself, fix it in
+  PingOne (claim mapping / resource placement), not in code.
 
 
 ## Skills

@@ -16,7 +16,8 @@ common.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from joserfc import jwt
@@ -51,6 +52,12 @@ class VerifiedIdentity:
     # 2026-08-16 — not present on every token shape (e.g. a plain Client
     # Credentials actor token has no reason to carry it), so treat as optional.
     agent_client_id: str | None = None
+    # The token's full decoded claim set, for callers that need to check a
+    # custom claim beyond the well-known ones above (e.g. mcp-todos-server's
+    # gateway-enforcement gate checking `gatewayEnforcement`). Raw by design:
+    # this module doesn't interpret custom claims, each service's own policy
+    # decides what to require.
+    claims: dict[str, Any] = field(default_factory=dict)
 
     def has_scope(self, required: str) -> bool:
         return required in (self.scope or "").split()
@@ -129,4 +136,5 @@ async def verify_bearer_token(token: str, *, discovery_url: str, expected_audien
         email=claims.get("email") or claims.get("preferred_username"),
         aud=expected_audience,
         agent_client_id=claims.get("agent_client_id"),
+        claims=claims,
     )
